@@ -22,6 +22,7 @@ module Logic.Attributes
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
+import Data.List (foldl')
 
 -- | An attribute is represented as text
 type Attribute = Text
@@ -43,7 +44,7 @@ closure attrs fds = go attrs
       | current == expanded = current
       | otherwise = go expanded
       where
-        expanded = foldl applyFD current fds
+        expanded = foldl' applyFD current fds
         applyFD acc (FD lhs rhs)
           | lhs `Set.isSubsetOf` acc = acc `Set.union` rhs
           | otherwise = acc
@@ -72,7 +73,7 @@ removeExtraneous fds = map removeFromFD fds
     removeFromFD (FD lhs rhs) = FD (minimalLhs lhs rhs) rhs
 
     minimalLhs :: AttributeSet -> AttributeSet -> AttributeSet
-    minimalLhs lhs rhs = foldl (tryRemove rhs) lhs (Set.toList lhs)
+    minimalLhs lhs rhs = foldl' (tryRemove rhs) lhs (Set.toList lhs)
 
     tryRemove :: AttributeSet -> AttributeSet -> Attribute -> AttributeSet
     tryRemove rhs currentLhs attr
