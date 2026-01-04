@@ -1,0 +1,140 @@
+cabal-version: 2.2
+
+-- This file has been generated from package.yaml by hpack version 0.37.0.
+--
+-- see: https://github.com/sol/hpack
+
+name:           closure-server
+version:        0.1.0.0
+synopsis:       Database normalization engine with BCNF/3NF support
+description:    A Theory-to-Implementation pipeline for database schemas using functional dependencies
+category:       Database
+author:         John Tian
+maintainer:     john@closure.dev
+copyright:      2026 John Tian
+license:        BSD-3-Clause
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    CHANGELOG.md
+
+library
+  exposed-modules:
+      Logic.Attributes
+      Logic.Normalizer
+      Logic.Workspace
+      App.HasPattern
+      App.Error
+      App.Monad
+      Api.Server
+  other-modules:
+      Paths_closure_server
+  autogen-modules:
+      Paths_closure_server
+  hs-source-dirs:
+      src
+  default-extensions:
+      OverloadedStrings
+      DeriveGeneric
+      DerivingStrategies
+      GeneralizedNewtypeDeriving
+      FlexibleContexts
+      FlexibleInstances
+      MultiParamTypeClasses
+      TypeFamilies
+      ConstraintKinds
+      RankNTypes
+      ScopedTypeVariables
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
+  build-depends:
+      aeson >=2.0
+    , base >=4.7 && <5
+    , containers >=0.6
+    , mtl >=2.2
+    , servant >=0.20
+    , servant-server >=0.20
+    , text >=2.0
+    , transformers >=0.5
+    , wai >=3.2
+    , wai-cors >=0.2
+    , warp >=3.3
+  default-language: Haskell2010
+
+executable closure-server-exe
+  main-is: Main.hs
+  other-modules:
+      Paths_closure_server
+  autogen-modules:
+      Paths_closure_server
+  hs-source-dirs:
+      app
+  default-extensions:
+      OverloadedStrings
+      DeriveGeneric
+      DerivingStrategies
+      GeneralizedNewtypeDeriving
+      FlexibleContexts
+      FlexibleInstances
+      MultiParamTypeClasses
+      TypeFamilies
+      ConstraintKinds
+      RankNTypes
+      ScopedTypeVariables
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      aeson >=2.0
+    , base >=4.7 && <5
+    , closure-server
+    , containers >=0.6
+    , mtl >=2.2
+    , servant >=0.20
+    , servant-server >=0.20
+    , text >=2.0
+    , transformers >=0.5
+    , wai >=3.2
+    , wai-cors >=0.2
+    , warp >=3.3
+  default-language: Haskell2010
+
+test-suite closure-server-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Logic.AttributesSpec
+      Logic.NormalizerSpec
+      Paths_closure_server
+  autogen-modules:
+      Paths_closure_server
+  hs-source-dirs:
+      test
+  default-extensions:
+      OverloadedStrings
+      DeriveGeneric
+      DerivingStrategies
+      GeneralizedNewtypeDeriving
+      FlexibleContexts
+      FlexibleInstances
+      MultiParamTypeClasses
+      TypeFamilies
+      ConstraintKinds
+      RankNTypes
+      ScopedTypeVariables
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      QuickCheck >=2.14
+    , aeson >=2.0
+    , base >=4.7 && <5
+    , closure-server
+    , containers >=0.6
+    , hspec >=2.7
+    , hspec-discover >=2.7
+    , mtl >=2.2
+    , servant >=0.20
+    , servant-server >=0.20
+    , text >=2.0
+    , transformers >=0.5
+    , wai >=3.2
+    , wai-cors >=0.2
+    , warp >=3.3
+  default-language: Haskell2010

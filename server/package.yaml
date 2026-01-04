@@ -1,0 +1,87 @@
+name:                closure-server
+version:             0.1.0.0
+license:             BSD-3-Clause
+author:              "John Tian"
+maintainer:          "john@closure.dev"
+copyright:           "2026 John Tian"
+
+extra-source-files:
+- README.md
+- CHANGELOG.md
+
+synopsis:            Database normalization engine with BCNF/3NF support
+category:            Database
+description:         A Theory-to-Implementation pipeline for database schemas using functional dependencies
+
+dependencies:
+- base >= 4.7 && < 5
+- mtl >= 2.2
+- transformers >= 0.5
+- containers >= 0.6
+- text >= 2.0
+- aeson >= 2.0
+- servant >= 0.20
+- servant-server >= 0.20
+- warp >= 3.3
+- wai >= 3.2
+- wai-cors >= 0.2
+
+default-extensions:
+- OverloadedStrings
+- DeriveGeneric
+- DerivingStrategies
+- GeneralizedNewtypeDeriving
+- FlexibleContexts
+- FlexibleInstances
+- MultiParamTypeClasses
+- TypeFamilies
+- ConstraintKinds
+- RankNTypes
+- ScopedTypeVariables
+
+ghc-options:
+- -Wall
+- -Wcompat
+- -Widentities
+- -Wincomplete-record-updates
+- -Wincomplete-uni-patterns
+- -Wmissing-export-lists
+- -Wmissing-home-modules
+- -Wpartial-fields
+- -Wredundant-constraints
+
+library:
+  source-dirs: src
+  exposed-modules:
+  - Logic.Attributes
+  - Logic.Normalizer
+  - Logic.Workspace
+  - App.HasPattern
+  - App.Error
+  - App.Monad
+  - Api.Server
+
+executables:
+  closure-server-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - closure-server
+
+tests:
+  closure-server-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - closure-server
+    - hspec >= 2.7
+    - hspec-discover >= 2.7
+    - QuickCheck >= 2.14
