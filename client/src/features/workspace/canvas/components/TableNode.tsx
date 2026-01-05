@@ -3,8 +3,23 @@ import { Handle, Position } from "reactflow";
 import { motion } from "framer-motion";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { type TableData } from "../view-model";
 import { RelationshipBuilder } from "./RelationshipBuilder";
+
+export interface TableData {
+    id: string;
+    name: string;
+    attributes: readonly string[];
+    fds: readonly { id: string; lhs: readonly string[]; rhs: readonly string[] }[];
+    candidateKeys?: readonly (readonly string[])[];
+    health?: { severity: "ok" | "warning" | "error"; message: string };
+    isLoading?: boolean;
+    onRename: (newName: string) => void;
+    onAddAttribute: (name: string) => void;
+    onDeleteAttribute: (name: string) => void;
+    onAddFD: (lhs: string[], rhs: string[]) => void;
+    onDeleteFD: (fdId: string) => void;
+    onOptimize: () => void;
+}
 
 export const TableNode = ({ data }: { data: TableData }): React.ReactElement => {
     const [isAddingAttr, setIsAddingAttr] = useState(false);

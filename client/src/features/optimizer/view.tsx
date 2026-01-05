@@ -19,7 +19,27 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Option } from "effect";
-import { type TreeNode, type TableHealth, type OptimizationStrategy } from "../workspace/model";
+
+// -- Consumer Interfaces --
+
+export type OptimizationStrategy = "bcnf" | "3nf" | "performance";
+
+export interface TableHealth {
+  readonly severity: "ok" | "warning" | "error";
+  readonly message: string;
+}
+
+export interface TreeNode {
+  readonly relation: {
+    readonly name: string;
+    readonly attributes: readonly string[];
+  };
+  readonly splitFD: Option.Option<{
+    readonly lhs: readonly string[];
+    readonly rhs: readonly string[];
+  }>;
+  readonly children: ReadonlyArray<TreeNode>;
+}
 
 export interface OptimizerViewProps {
   isOpen: boolean;
