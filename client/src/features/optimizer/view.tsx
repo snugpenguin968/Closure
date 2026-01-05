@@ -32,7 +32,7 @@ export interface TableHealth {
 export interface TreeNode {
   readonly relation: {
     readonly name: string;
-    readonly attributes: readonly string[];
+    readonly attributes: readonly { name: string; sqlType: string }[];
   };
   readonly splitFD: Option.Option<{
     readonly lhs: readonly string[];
@@ -55,14 +55,16 @@ export interface OptimizerViewProps {
   }>;
 }
 
-const DecompositionTreeItem = ({ node }: { node: TreeNode }) => {
+const DecompositionTreeItem = ({ node }: { node: TreeNode }): React.ReactElement => {
   return (
     <div className="flex flex-col gap-2 ml-4">
       <div className="flex items-center gap-2 border-l-2 border-slate-200 pl-2 py-1">
         <Badge variant="outline" className="text-xs font-mono">
           {node.relation.name}
         </Badge>
-        <span className="text-xs text-slate-400">({node.relation.attributes.join(", ")})</span>
+        <span className="text-xs text-slate-400">
+          ({node.relation.attributes.map((a) => a.name).join(", ")})
+        </span>
       </div>
       {Option.isSome(node.splitFD) && (
         <div className="pl-4 text-xs text-amber-600 font-mono">

@@ -19,6 +19,7 @@ import {
   type TableId,
   type BackendTreeNode,
   type FDId,
+  DEFAULT_SQL_TYPE,
 } from "../workspace/model";
 
 export const OptimizerAdapter = (): React.ReactElement => {
@@ -77,7 +78,10 @@ export const OptimizerAdapter = (): React.ReactElement => {
               relation: {
                 id: node.tnRelation.rjName as TableId,
                 name: node.tnRelation.rjName,
-                attributes: node.tnRelation.rjAttributes.map((a) => a as Attribute),
+                attributes: node.tnRelation.rjAttributes.map((attr) => ({
+                  name: attr.ajName as Attribute,
+                  sqlType: (attr.ajType || DEFAULT_SQL_TYPE) as typeof DEFAULT_SQL_TYPE,
+                })),
                 fds: node.tnRelation.rjFDs.map((fd) => ({
                   id: crypto.randomUUID() as FDId,
                   lhs: fd.fjLhs.map((a) => a as Attribute),

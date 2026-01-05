@@ -1,13 +1,3 @@
-/**
- * Domain Logic Layer
- * Pure functions for domain transformations and mapping.
- * No side effects.
- *
- * Design:
- * - Structural typing for inputs/outputs.
- * - Separates "how to calculate" from "when to update".
- */
-
 import { HashMap } from "effect";
 import {
   type Relation,
@@ -22,6 +12,8 @@ import {
   type BackendTreeNode,
   type BackendHealth,
   type BackendWorkspaceResponse,
+  type SQLType,
+  DEFAULT_SQL_TYPE,
 } from "./model";
 import { type LayoutNode } from "./layout";
 
@@ -44,7 +36,10 @@ const generateFDId = (): FDId => crypto.randomUUID() as FDId;
 export const toRelation = (br: BackendRelation, position: Position = { x: 0, y: 0 }): Relation => ({
   id: crypto.randomUUID() as TableId,
   name: br.rjName,
-  attributes: br.rjAttributes.map((s) => asAttribute(s)),
+  attributes: br.rjAttributes.map((attr) => ({
+    name: asAttribute(attr.ajName),
+    sqlType: (attr.ajType || DEFAULT_SQL_TYPE) as SQLType,
+  })),
   fds: br.rjFDs.map((fd) => ({
     id: generateFDId(),
     lhs: fd.fjLhs.map((s) => asAttribute(s)),

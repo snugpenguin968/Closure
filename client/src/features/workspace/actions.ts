@@ -18,6 +18,8 @@ import {
   type CrossTableFD,
   type FDId,
   type TableHealth,
+  type SQLType,
+  DEFAULT_SQL_TYPE,
 } from "./model";
 
 // -- UUID Generation --
@@ -99,13 +101,13 @@ const recalculateCrossTableSuggestions = (ws: Workspace): Workspace => {
         return ctfd;
       }
 
-      const fromAttrs = new Set(fromRel.value.attributes);
-      const sharedAttrs = toRel.value.attributes.filter((a) => fromAttrs.has(a));
+      const fromAttrNames = new Set(fromRel.value.attributes.map((a) => a.name));
+      const sharedAttrs = toRel.value.attributes.filter((a) => fromAttrNames.has(a.name));
 
       const suggestion =
         sharedAttrs.length === 0
           ? "No shared keys? Potential join dependency."
-          : `Shared: ${sharedAttrs.join(", ")} ✓ Possible FK relationship.`;
+          : `Shared: ${sharedAttrs.map((a) => a.name).join(", ")} ✓ Possible FK relationship.`;
 
       return { ...ctfd, suggestion };
     })
@@ -118,7 +120,7 @@ const recalculateCrossTableSuggestions = (ws: Workspace): Workspace => {
 
 export const addRelation = (
   name: string,
-  attributes: string[],
+  attributes: { name: string; sqlType: SQLType }[],
   fds: { lhs: string[]; rhs: string[] }[],
   x: number,
   y: number
@@ -128,7 +130,10 @@ export const addRelation = (
     const newRelation: Relation = {
       id,
       name,
-      attributes: attributes.map((a) => a as Attribute),
+      attributes: attributes.map((a) => ({
+        name: a.name as Attribute,
+        sqlType: a.sqlType,
+      })),
       fds: fds.map((fd) => ({
         id: generateFDId(),
         lhs: fd.lhs.map((a) => a as Attribute),
@@ -164,13 +169,17 @@ export const renameRelation = (id: TableId, newName: string) =>
     relations: updateRelation(ws.relations, id, (r) => ({ ...r, name: newName })),
   }));
 
-export const addAttribute = (relationId: TableId, name: string) =>
+export const addAttribute = (
+  relationId: TableId,
+  name: string,
+  sqlType: SQLType = DEFAULT_SQL_TYPE
+) =>
   makeAction((ws) => {
     const updated = {
       ...ws,
       relations: updateRelation(ws.relations, relationId, (r) => ({
         ...r,
-        attributes: [...r.attributes, name as Attribute],
+        attributes: [...r.attributes, { name: name as Attribute, sqlType }],
       })),
     };
     return recalculateCrossTableSuggestions(updated);
@@ -182,7 +191,7 @@ export const deleteAttribute = (relationId: TableId, name: string) =>
       ...ws,
       relations: updateRelation(ws.relations, relationId, (r) => ({
         ...r,
-        attributes: r.attributes.filter((a) => a !== name),
+        attributes: r.attributes.filter((a) => a.name !== name),
         fds: r.fds.filter(
           (fd) => !fd.lhs.includes(name as Attribute) && !fd.rhs.includes(name as Attribute)
         ),
@@ -287,7 +296,9 @@ export const mergeRelations = (id1: TableId, id2: TableId) =>
     const r1 = r1Opt.value;
     const r2 = r2Opt.value;
 
-    const mergedAttrs = Array.from(new Set([...r1.attributes, ...r2.attributes]));
+    const existingNames = new Set(r1.attributes.map((a) => a.name));
+    const uniqueFromR2 = r2.attributes.filter((a) => !existingNames.has(a.name));
+    const mergedAttrs = [...r1.attributes, ...uniqueFromR2];
     const mergedFDs = [...r1.fds, ...r2.fds];
 
     const mergedRel: Relation = {

@@ -18,6 +18,7 @@ import {
   type CrossTableFDId,
   type BackendDecompositionResult,
   type BackendAnalyzeResponse,
+  type SQLType,
 } from "./model";
 
 import { type WorkspaceState, initialState } from "./state";
@@ -57,14 +58,18 @@ export interface WorkspaceService {
 
   readonly addRelation: (
     name: string,
-    attributes: string[],
+    attributes: { name: string; sqlType: SQLType }[],
     fds: { lhs: string[]; rhs: string[] }[],
     x: number,
     y: number
   ) => Effect.Effect<void>;
   readonly renameRelation: (id: TableId, newName: string) => Effect.Effect<void>;
   readonly deleteRelation: (id: TableId) => Effect.Effect<void>;
-  readonly addAttribute: (relationId: TableId, name: string) => Effect.Effect<void>;
+  readonly addAttribute: (
+    relationId: TableId,
+    name: string,
+    sqlType: SQLType
+  ) => Effect.Effect<void>;
   readonly deleteAttribute: (relationId: TableId, name: string) => Effect.Effect<void>;
   readonly addFD: (relationId: TableId, lhs: string[], rhs: string[]) => Effect.Effect<void>;
   readonly deleteFD: (relationId: TableId, fdId: FDId) => Effect.Effect<void>;
@@ -107,7 +112,7 @@ const make = Effect.gen(function* (_) {
 
   const addRelation = (
     name: string,
-    attributes: string[],
+    attributes: { name: string; sqlType: SQLType }[],
     fds: { lhs: string[]; rhs: string[] }[],
     x: number,
     y: number
@@ -116,7 +121,6 @@ const make = Effect.gen(function* (_) {
       yield* Ref.update(state, Actions.addRelation(name, attributes, fds, x, y));
       const currentState = yield* Ref.get(state);
       const ws = currentState.present;
-      // Optimistic find
       const addedRel = Array.from(HashMap.values(ws.relations)).find((r) => r.name === name);
       if (addedRel) {
         yield* PubSub.publish(events, {
@@ -133,8 +137,8 @@ const make = Effect.gen(function* (_) {
   const renameRelation = (id: TableId, newName: string) =>
     updateAndPublish(Actions.renameRelation(id, newName), { _tag: "RELATION_UPDATED", id });
 
-  const addAttribute = (relationId: TableId, name: string) =>
-    updateAndPublish(Actions.addAttribute(relationId, name), {
+  const addAttribute = (relationId: TableId, name: string, sqlType: SQLType) =>
+    updateAndPublish(Actions.addAttribute(relationId, name, sqlType), {
       _tag: "RELATION_UPDATED",
       id: relationId,
     });

@@ -52,7 +52,10 @@ const normalize = (
     const payload = {
       nrRelation: {
         rjName: req.relation.name,
-        rjAttributes: req.relation.attributes,
+        rjAttributes: req.relation.attributes.map((a) => ({
+          ajName: a.name,
+          ajType: a.sqlType,
+        })),
         rjFDs: req.relation.fds.map((fd) => ({ fjLhs: fd.lhs, fjRhs: fd.rhs })),
       },
       nrStrategy: req.strategy,
@@ -91,7 +94,10 @@ const optimize = (
           body: JSON.stringify({
             wrRelations: relations.map((r) => ({
               rjName: r.name,
-              rjAttributes: r.attributes,
+              rjAttributes: r.attributes.map((a) => ({
+                ajName: a.name,
+                ajType: a.sqlType,
+              })),
               rjFDs: r.fds.map((fd) => ({
                 fjLhs: fd.lhs,
                 fjRhs: fd.rhs,
@@ -117,7 +123,10 @@ const analyze = (
     const payload = {
       arRelation: {
         rjName: relation.name,
-        rjAttributes: relation.attributes,
+        rjAttributes: relation.attributes.map((a) => ({
+          ajName: a.name,
+          ajType: a.sqlType,
+        })),
         rjFDs: relation.fds.map((fd) => ({ fjLhs: fd.lhs, fjRhs: fd.rhs })),
       },
     };

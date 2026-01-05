@@ -4,14 +4,14 @@
  * Determines how to reroute edges when a table is split into multiple tables.
  */
 
-import { type Relation, type Attribute, type TableId } from "./model";
+import { type Relation, type TypedAttribute, type TableId } from "./model";
 
 // -- Types --
 
 export interface MigrationResult {
   readonly newTableId: TableId;
   readonly sharedCount: number;
-  readonly sharedAttributes: readonly Attribute[];
+  readonly sharedAttributeNames: readonly string[];
 }
 
 // -- Core Algorithm --
@@ -21,38 +21,29 @@ export interface MigrationResult {
  *
  * Strategy: Route to the decomposed table that has the most shared attributes
  * with the source table. This preserves the semantic relationship.
- *
- * Example:
- *   Source: Orders(order_id, customer_id, order_date)
- *   Decomposed tables:
- *     - Customer_Core(customer_id, name)      ← 1 shared attr (customer_id)
- *     - Customer_Address(customer_id, address) ← 1 shared attr
- *
- *   Both have 1 shared attribute, so we pick the first one (Customer_Core)
- *   which is typically the "main" table in the decomposition.
  */
 export const findBestDestination = (
-  sourceAttributes: readonly Attribute[],
+  sourceAttributes: readonly TypedAttribute[],
   decomposedTables: readonly Relation[]
 ): MigrationResult | null => {
   if (decomposedTables.length === 0) {
     return null;
   }
 
-  const sourceSet = new Set(sourceAttributes);
+  const sourceNames = new Set(sourceAttributes.map((a) => a.name));
 
   let bestMatch: MigrationResult | null = null;
 
   for (const table of decomposedTables) {
-    const sharedAttributes = table.attributes.filter((a) => sourceSet.has(a));
-    const sharedCount = sharedAttributes.length;
+    const sharedAttrs = table.attributes.filter((a) => sourceNames.has(a.name));
+    const sharedCount = sharedAttrs.length;
 
     if (sharedCount > 0) {
       if (!bestMatch || sharedCount > bestMatch.sharedCount) {
         bestMatch = {
           newTableId: table.id,
           sharedCount,
-          sharedAttributes,
+          sharedAttributeNames: sharedAttrs.map((a) => a.name),
         };
       }
     }
@@ -68,10 +59,9 @@ export const findBestDestination = (
  * to the decomposed table that contains the relevant FK attributes.
  */
 export const findSourceForOutgoingEdge = (
-  targetAttributes: readonly Attribute[],
+  targetAttributes: readonly TypedAttribute[],
   decomposedTables: readonly Relation[]
 ): MigrationResult | null => {
-  // Same algorithm - find table with most shared attributes
   return findBestDestination(targetAttributes, decomposedTables);
 };
 
@@ -84,5 +74,5 @@ export const generateMigrationSuggestion = (result: MigrationResult): string => 
   if (result.sharedCount === 0) {
     return "Migrated (no shared attributes found)";
   }
-  return `Shared: ${result.sharedAttributes.join(", ")} ✓ (migrated)`;
+  return `Shared: ${result.sharedAttributeNames.join(", ")} ✓ (migrated)`;
 };

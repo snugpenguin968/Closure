@@ -16,6 +16,68 @@ import { type HashMap, type Option } from "effect";
 export const Attribute = Schema.String.pipe(Schema.brand("Attribute"));
 export type Attribute = Schema.Schema.Type<typeof Attribute>;
 
+export const SQL_TYPES = [
+  // Integers
+  "SMALLINT",
+  "INTEGER",
+  "BIGINT",
+  "SERIAL",
+  "BIGSERIAL",
+  // Floats
+  "REAL",
+  "DOUBLE PRECISION",
+  "DECIMAL(10,2)",
+  "DECIMAL(12,2)",
+  "DECIMAL(18,4)",
+  "NUMERIC",
+  // Strings
+  "CHAR(1)",
+  "CHAR(10)",
+  "VARCHAR(50)",
+  "VARCHAR(100)",
+  "VARCHAR(255)",
+  "VARCHAR(1000)",
+  "TEXT",
+  // Dates & Times
+  "DATE",
+  "TIME",
+  "TIMESTAMP",
+  "TIMESTAMP WITH TIME ZONE",
+  "INTERVAL",
+  // Boolean
+  "BOOLEAN",
+  // Binary
+  "BYTEA",
+  "BLOB",
+  // JSON
+  "JSON",
+  "JSONB",
+  // UUID
+  "UUID",
+  // Arrays
+  "INTEGER[]",
+  "TEXT[]",
+  "VARCHAR(255)[]",
+  // Special
+  "MONEY",
+  "INET",
+  "CIDR",
+  "MACADDR",
+  "POINT",
+  "LINE",
+  "POLYGON",
+  "XML",
+] as const;
+
+export type SQLType = (typeof SQL_TYPES)[number];
+
+export const DEFAULT_SQL_TYPE: SQLType = "TEXT";
+
+export interface TypedAttribute {
+  readonly name: Attribute;
+  readonly sqlType: SQLType;
+}
+
 export interface History<T> {
   readonly past: ReadonlyArray<T>;
   readonly present: T;
@@ -76,7 +138,7 @@ export interface TableHealth {
 export interface Relation {
   readonly id: TableId;
   readonly name: string;
-  readonly attributes: readonly Attribute[];
+  readonly attributes: readonly TypedAttribute[];
   readonly fds: readonly FunctionalDependency[];
   readonly position: Position;
 }
@@ -126,9 +188,16 @@ export type OptimizationStrategy = Schema.Schema.Type<typeof OptimizationStrateg
 // -- API Types (matching Backend) --
 // Backend uses names, not IDs. Frontend maps these in effects.ts.
 
+export const BackendAttribute = Schema.Struct({
+  ajName: Schema.String,
+  ajType: Schema.String,
+});
+
+export type BackendAttribute = Schema.Schema.Type<typeof BackendAttribute>;
+
 export const BackendRelation = Schema.Struct({
   rjName: Schema.String,
-  rjAttributes: Schema.Array(Schema.String),
+  rjAttributes: Schema.Array(BackendAttribute),
   rjFDs: Schema.Array(
     Schema.Struct({ fjLhs: Schema.Array(Schema.String), fjRhs: Schema.Array(Schema.String) })
   ),

@@ -57,10 +57,19 @@ data FDJSON = FDJSON
 instance FromJSON FDJSON
 instance ToJSON FDJSON
 
+-- | Attribute representation in JSON (with type info)
+data AttributeJSON = AttributeJSON
+  { ajName :: !Text
+  , ajType :: !Text
+  } deriving stock (Generic, Show)
+
+instance FromJSON AttributeJSON
+instance ToJSON AttributeJSON
+
 -- | Relation representation in JSON
 data RelationJSON = RelationJSON
   { rjName       :: !Text
-  , rjAttributes :: ![Text]
+  , rjAttributes :: ![AttributeJSON]
   , rjFDs        :: ![FDJSON]
   } deriving stock (Generic, Show)
 
@@ -184,24 +193,20 @@ instance ToJSON WorkspaceResponse
 -- | Validate a relation JSON input
 validateRelation :: RelationJSON -> Either AppError Relation
 validateRelation (RelationJSON name attrs fds) = do
-  -- Validate name is not empty
   when (T.null (T.strip name)) $
     Left $ validationError $ EmptyField "relationName"
   
-  -- Validate attributes not empty
   when (null attrs) $
     Left $ validationError $ EmptyField "attributes"
   
-  -- Validate each attribute is not empty
-  let emptyAttrs = filter (T.null . T.strip) attrs
+  let attrNames = map (T.strip . ajName) attrs
+      emptyAttrs = filter T.null attrNames
   when (not (null emptyAttrs)) $
     Left $ validationError $ InvalidValue "attributes" "contains empty attribute names"
   
-  -- Validate FDs reference valid attributes
-  let allAttrs = Set.fromList (map T.strip attrs)
+  let allAttrs = Set.fromList attrNames
   mapM_ (validateFD allAttrs) fds
   
-  -- Build the relation
   let validFDs = map jsonToFD fds
   Right $ Relation (T.strip name) allAttrs validFDs
 
@@ -248,7 +253,7 @@ fdToJSON (FD lhs rhs) = FDJSON (Set.toList lhs) (Set.toList rhs)
 
 relationToJSON :: Relation -> RelationJSON
 relationToJSON (Relation name attrs fds) =
-  RelationJSON name (Set.toList attrs) (map fdToJSON fds)
+  RelationJSON name (map (\a -> AttributeJSON a "TEXT") (Set.toList attrs)) (map fdToJSON fds)
 
 healthToJSON :: NormalizationHealth -> HealthJSON
 healthToJSON nh = HealthJSON
