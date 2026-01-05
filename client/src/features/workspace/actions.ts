@@ -16,10 +16,7 @@ import {
   type MergeSuggestion,
   type CrossTableFDId,
   type CrossTableFD,
-  type ForeignKeyId,
-  type ForeignKey,
   type FDId,
-  type FunctionalDependency,
   type TableHealth,
 } from "./model";
 
@@ -28,7 +25,6 @@ import {
 const generateTableId = (): TableId => crypto.randomUUID() as TableId;
 const generateFDId = (): FDId => crypto.randomUUID() as FDId;
 const generateCrossTableFDId = (): CrossTableFDId => crypto.randomUUID() as CrossTableFDId;
-const generateForeignKeyId = (): ForeignKeyId => crypto.randomUUID() as ForeignKeyId;
 
 // -- History Actions --
 
@@ -74,10 +70,10 @@ export const redo = <T>(history: History<T>): History<T> => {
 
 const makeAction =
   (transform: (ws: Workspace) => Workspace) =>
-    (state: WorkspaceState): WorkspaceState => {
-      const newWorkspace = transform(state.present);
-      return push(state, newWorkspace);
-    };
+  (state: WorkspaceState): WorkspaceState => {
+    const newWorkspace = transform(state.present);
+    return push(state, newWorkspace);
+  };
 
 // -- HashMap Helpers --
 
@@ -353,14 +349,14 @@ export const replaceRelation = (oldId: TableId, newRelations: Relation[]) =>
 
 /**
  * Decompose a relation into multiple tables with edge migration.
- * 
+ *
  * This action:
  * 1. Removes the old relation
  * 2. Adds all new decomposed relations
  * 3. Migrates inbound edges (crossTableFDs/foreignKeys pointing TO old table)
  * 4. Migrates outbound edges (edges FROM old table)
  * 5. Cleans up health, merge suggestions
- * 
+ *
  * @param oldId - The table being decomposed
  * @param newRelations - The decomposed tables with positions already set
  * @param inboundMigrations - Map of edge ID → new target table ID
@@ -469,4 +465,3 @@ const recalculateSuggestion = (
   }
   return `Shared: ${sharedAttrs.join(", ")} ✓ (migrated)`;
 };
-

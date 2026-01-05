@@ -79,11 +79,11 @@ const RelationshipBuilder = ({
   attributes: readonly string[];
   onSave: (lhs: string[], rhs: string[]) => void;
   onCancel: () => void;
-}) => {
+}): React.ReactElement => {
   const [lhs, setLhs] = useState<Set<string>>(new Set());
   const [rhs, setRhs] = useState<Set<string>>(new Set());
 
-  const toggleLhs = (attr: string) => {
+  const toggleLhs = (attr: string): void => {
     const next = new Set(lhs);
     if (next.has(attr)) {
       next.delete(attr);
@@ -93,7 +93,7 @@ const RelationshipBuilder = ({
     setLhs(next);
   };
 
-  const toggleRhs = (attr: string) => {
+  const toggleRhs = (attr: string): void => {
     const next = new Set(rhs);
     if (next.has(attr)) {
       next.delete(attr);
@@ -103,7 +103,7 @@ const RelationshipBuilder = ({
     setRhs(next);
   };
 
-  const handleSave = () => {
+  const handleSave = (): void => {
     if (lhs.size > 0 && rhs.size > 0) {
       onSave(Array.from(lhs), Array.from(rhs));
     }
@@ -486,7 +486,7 @@ const SuggestionsCard = ({
   suggestions: readonly MergeSuggestionDisplay[];
   onClose: () => void;
   onApply: (id1: string, id2: string) => void;
-}) => (
+}): React.ReactElement => (
   <Card className="w-80 shadow-xl pointer-events-auto bg-white/95 backdrop-blur border-indigo-100">
     <CardHeader className="p-3 border-b border-indigo-50 bg-gradient-to-r from-indigo-50 to-purple-50 flex flex-row items-center justify-between space-y-0">
       <CardTitle className="text-sm font-medium flex items-center gap-2 text-indigo-900">
@@ -542,13 +542,15 @@ const WorkspaceDashboardImpl = ({
   onMerge: (id1: string, id2: string) => void;
 }): React.ReactElement => {
   const [showSuggestions, setShowSuggestions] = useState(true);
+  const [lastSuggestions, setLastSuggestions] = useState(suggestions);
 
   // Reset showSuggestions when new suggestions arrive
-  useEffect(() => {
+  if (suggestions !== lastSuggestions) {
+    setLastSuggestions(suggestions);
     if (suggestions.length > 0) {
       setShowSuggestions(true);
     }
-  }, [suggestions]);
+  }
 
   return (
     <div className="absolute top-4 right-4 z-10 flex flex-col gap-4 items-end pointer-events-none">

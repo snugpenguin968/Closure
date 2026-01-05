@@ -14,13 +14,13 @@ const VERTICAL_SPACING = 200;
 // -- Types --
 
 export interface LayoutNode {
-    readonly name: string;
-    readonly children: readonly LayoutNode[];
+  readonly name: string;
+  readonly children: readonly LayoutNode[];
 }
 
 export interface LayoutResult {
-    readonly name: string;
-    readonly position: Position;
+  readonly name: string;
+  readonly position: Position;
 }
 
 // -- Tree Layout --
@@ -30,14 +30,16 @@ export interface LayoutResult {
  * Used to determine spacing for child nodes.
  */
 const getTreeWidth = (node: LayoutNode): number => {
-    if (node.children.length === 0) return 1;
-    return node.children.reduce((sum, child) => sum + getTreeWidth(child), 0);
+  if (node.children.length === 0) {
+    return 1;
+  }
+  return node.children.reduce((sum, child) => sum + getTreeWidth(child), 0);
 };
 
 /**
  * Layout a decomposition tree with root at anchor position.
  * Children fan out below, centered under their parent.
- * 
+ *
  * Visual structure:
  *           [Root]          ← anchor position
  *          /      \
@@ -46,35 +48,37 @@ const getTreeWidth = (node: LayoutNode): number => {
  *   [Grandchild]            ← another VERTICAL_SPACING below
  */
 export const layoutTree = (root: LayoutNode, anchor: Position): LayoutResult[] => {
-    const results: LayoutResult[] = [];
+  const results: LayoutResult[] = [];
 
-    const layoutNode = (node: LayoutNode, x: number, y: number): void => {
-        results.push({ name: node.name, position: { x, y } });
+  const layoutNode = (node: LayoutNode, x: number, y: number): void => {
+    results.push({ name: node.name, position: { x, y } });
 
-        if (node.children.length === 0) return;
+    if (node.children.length === 0) {
+      return;
+    }
 
-        // Calculate width for each child subtree
-        const childWidths = node.children.map(getTreeWidth);
-        const totalWidth = childWidths.reduce((a, b) => a + b, 0);
+    // Calculate width for each child subtree
+    const childWidths = node.children.map(getTreeWidth);
+    const totalWidth = childWidths.reduce((a, b) => a + b, 0);
 
-        // Start position: center children under parent
-        let currentX = x - ((totalWidth - 1) * HORIZONTAL_SPACING) / 2;
-        const childY = y + VERTICAL_SPACING;
+    // Start position: center children under parent
+    let currentX = x - ((totalWidth - 1) * HORIZONTAL_SPACING) / 2;
+    const childY = y + VERTICAL_SPACING;
 
-        for (let i = 0; i < node.children.length; i++) {
-            const child = node.children[i];
-            const childWidth = childWidths[i];
+    for (let i = 0; i < node.children.length; i++) {
+      const child = node.children[i];
+      const childWidth = childWidths[i];
 
-            // Center child within its allocated width
-            const childX = currentX + ((childWidth - 1) * HORIZONTAL_SPACING) / 2;
-            layoutNode(child, childX, childY);
+      // Center child within its allocated width
+      const childX = currentX + ((childWidth - 1) * HORIZONTAL_SPACING) / 2;
+      layoutNode(child, childX, childY);
 
-            currentX += childWidth * HORIZONTAL_SPACING;
-        }
-    };
+      currentX += childWidth * HORIZONTAL_SPACING;
+    }
+  };
 
-    layoutNode(root, anchor.x, anchor.y);
-    return results;
+  layoutNode(root, anchor.x, anchor.y);
+  return results;
 };
 
 // -- Grid Layout (Fallback) --
@@ -84,17 +88,17 @@ export const layoutTree = (root: LayoutNode, anchor: Position): LayoutResult[] =
  * Used as fallback when backend doesn't return decomposition tree.
  */
 export const layoutGrid = (
-    names: readonly string[],
-    anchor: Position,
-    columns: number = 3
+  names: readonly string[],
+  anchor: Position,
+  columns: number = 3
 ): LayoutResult[] => {
-    return names.map((name, i) => ({
-        name,
-        position: {
-            x: anchor.x + (i % columns) * HORIZONTAL_SPACING,
-            y: anchor.y + Math.floor(i / columns) * VERTICAL_SPACING,
-        },
-    }));
+  return names.map((name, i) => ({
+    name,
+    position: {
+      x: anchor.x + (i % columns) * HORIZONTAL_SPACING,
+      y: anchor.y + Math.floor(i / columns) * VERTICAL_SPACING,
+    },
+  }));
 };
 
 // -- Helpers --
@@ -102,7 +106,7 @@ export const layoutGrid = (
 /**
  * Get configuration values for external use.
  */
-export const getLayoutConfig = () => ({
-    horizontalSpacing: HORIZONTAL_SPACING,
-    verticalSpacing: VERTICAL_SPACING,
+export const getLayoutConfig = (): { horizontalSpacing: number; verticalSpacing: number } => ({
+  horizontalSpacing: HORIZONTAL_SPACING,
+  verticalSpacing: VERTICAL_SPACING,
 });

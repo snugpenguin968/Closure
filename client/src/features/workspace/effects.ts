@@ -1,71 +1,49 @@
 /**
- * Effects (Service Layer)
- * Orchestrates API calls, PubSub events, and State Actions.
- *
- * DESIGN: This layer handles the mapping between backend (name-based)
- * and frontend (ID-based) representations.
- * Uses typed errors for exhaustive error handling.
- * Uses granular PubSub events for fine-grained reactivity.
+ * Workspace Service (Orchestration Layer)
+ * Coordinates:
+ * 1. API Calls (Infrastructure)
+ * 2. Domain Logic (Business Rules)
+ * 3. State Updates (Actions)
+ * 4. Events (PubSub)
  */
 
-import { Effect, Context, Layer, Ref, PubSub, Option, HashMap, pipe } from "effect";
-import * as Schema from "@effect/schema/Schema";
+import { Effect, Context, Layer, Ref, PubSub, Option, HashMap } from "effect";
 import {
   type Workspace,
   type Relation,
   type OptimizationStrategy,
-  type BackendRelation,
   type TableId,
-  type MergeSuggestion,
   type Position,
   type FDId,
   type CrossTableFDId,
-  type TableHealth,
-  BackendDecompositionResult,
-  BackendWorkspaceResponse,
-  type Attribute,
-  BackendHealth,
+  type BackendDecompositionResult,
+  type BackendAnalyzeResponse,
 } from "./model";
 
 import { type WorkspaceState, initialState } from "./state";
 import * as Actions from "./actions";
-import { API_BASE_URL } from "./config";
-import { NetworkError, DecodeError, type WorkspaceError } from "./errors";
-import { layoutTree, layoutGrid, type LayoutNode, type LayoutResult } from "./layout";
+import { type WorkspaceError } from "./errors";
+
+import { api } from "./api";
+import * as Logic from "./logic";
+import { layoutTree, layoutGrid } from "./layout";
 import { findBestDestination } from "./link-migration";
 
-// -- Schemas --
-
-const BackendAnalyzeResponse = Schema.Struct({
-  aresSuccess: Schema.Boolean,
-  aresHealth: Schema.OptionFromNullOr(BackendHealth),
-  aresCandidateKeys: Schema.Array(Schema.Array(Schema.String)),
-  aresIsBCNF: Schema.Boolean,
-  aresIs3NF: Schema.Boolean,
-  aresError: Schema.OptionFromNullOr(Schema.String),
-});
-
-// -- Granular Events --
+// -- Events Definition --
 
 export type WorkspaceEvent =
-  // Relation lifecycle
   | { _tag: "RELATION_ADDED"; id: TableId; relation: Relation }
   | { _tag: "RELATION_UPDATED"; id: TableId }
   | { _tag: "RELATION_DELETED"; id: TableId }
   | { _tag: "RELATION_MOVED"; id: TableId; position: Position }
-  // Cross-table relationships
   | { _tag: "CROSS_TABLE_FD_ADDED"; id: CrossTableFDId; fromId: TableId; toId: TableId }
   | { _tag: "CROSS_TABLE_FD_DELETED"; id: CrossTableFDId }
-  // Analysis
   | { _tag: "ANALYSIS_STARTED" }
   | { _tag: "ANALYSIS_COMPLETED" }
   | { _tag: "NORMALIZATION_COMPLETED"; oldId: TableId; newIds: TableId[] }
-  // Merge
   | { _tag: "RELATIONS_MERGED"; survivingId: TableId; deletedId: TableId }
-  // History
   | { _tag: "UNDO" }
   | { _tag: "REDO" }
-  // Generic fallback for bulk updates
   | { _tag: "STATE_CHANGED" };
 
 // -- Service Definition --
@@ -74,7 +52,6 @@ export interface WorkspaceService {
   readonly state: Ref.Ref<WorkspaceState>;
   readonly events: PubSub.PubSub<WorkspaceEvent>;
 
-  // Actions
   readonly undo: Effect.Effect<void>;
   readonly redo: Effect.Effect<void>;
 
@@ -113,7 +90,6 @@ const make = Effect.gen(function* (_) {
   const state = yield* Ref.make<WorkspaceState>(initialState);
   const events = yield* PubSub.unbounded<WorkspaceEvent>();
 
-  // Helper: Update state and publish event
   const updateAndPublish = (
     action: (s: WorkspaceState) => WorkspaceState,
     event: WorkspaceEvent
@@ -123,20 +99,11 @@ const make = Effect.gen(function* (_) {
       yield* PubSub.publish(events, event);
     });
 
-  // Build name→ID lookup from current workspace
-  const buildNameToIdMap = (ws: Workspace): Map<string, TableId> => {
-    const result = new Map<string, TableId>();
-    for (const [id, rel] of HashMap.entries(ws.relations)) {
-      result.set(rel.name, id);
-    }
-    return result;
-  };
-
   // --- History ---
   const undo = updateAndPublish(Actions.undo, { _tag: "UNDO" });
   const redo = updateAndPublish(Actions.redo, { _tag: "REDO" });
 
-  // --- CRUD ---
+  // --- CRUD Operations ---
 
   const addRelation = (
     name: string,
@@ -147,17 +114,10 @@ const make = Effect.gen(function* (_) {
   ) =>
     Effect.gen(function* (_) {
       yield* Ref.update(state, Actions.addRelation(name, attributes, fds, x, y));
-      // Get the newly added relation
       const currentState = yield* Ref.get(state);
       const ws = currentState.present;
-      // Find by name (just added)
-      let addedRel: Relation | undefined;
-      for (const rel of HashMap.values(ws.relations)) {
-        if (rel.name === name) {
-          addedRel = rel;
-          break;
-        }
-      }
+      // Optimistic find
+      const addedRel = Array.from(HashMap.values(ws.relations)).find((r) => r.name === name);
       if (addedRel) {
         yield* PubSub.publish(events, {
           _tag: "RELATION_ADDED",
@@ -200,9 +160,9 @@ const make = Effect.gen(function* (_) {
   const addCrossTableFD = (fromTableId: TableId, toTableId: TableId) =>
     Effect.gen(function* (_) {
       yield* Ref.update(state, Actions.addCrossTableFD(fromTableId, toTableId));
-      // Find the just-added crossTableFD
       const currentState = yield* Ref.get(state);
       const ws = currentState.present;
+      // Find the ID (could be optimized if Action returned it, but this is fine for now)
       let addedId: CrossTableFDId | undefined;
       for (const [id, ctfd] of HashMap.entries(ws.crossTableFDs)) {
         if (ctfd.fromTableId === fromTableId && ctfd.toTableId === toTableId) {
@@ -226,7 +186,6 @@ const make = Effect.gen(function* (_) {
   const updateRelationPosition = (id: TableId, x: number, y: number) =>
     Effect.gen(function* (_) {
       yield* Ref.update(state, Actions.updateRelationPosition(id, x, y));
-      // Position updates are frequent during drag, use specific event
       yield* PubSub.publish(events, { _tag: "RELATION_MOVED", id, position: { x, y } });
     });
 
@@ -237,32 +196,7 @@ const make = Effect.gen(function* (_) {
       deletedId: id2,
     });
 
-  // --- Complex Effects (API) ---
-
-  const asAttribute = (s: string): Attribute => s as Attribute;
-
-  const generateFDId = (): FDId => crypto.randomUUID() as FDId;
-
-  const toRelation = (
-    br: typeof BackendRelation.Type,
-    position: Position = { x: 0, y: 0 }
-  ): Relation => ({
-    id: crypto.randomUUID() as TableId,
-    name: br.rjName,
-    attributes: br.rjAttributes.map((s) => asAttribute(s)),
-    fds: br.rjFDs.map((fd) => ({
-      id: generateFDId(),
-      lhs: fd.fjLhs.map((s) => asAttribute(s)),
-      rhs: fd.fjRhs.map((s) => asAttribute(s)),
-    })),
-    position,
-  });
-
-  // Convert backend decomposition tree to layout node structure
-  const backendTreeToLayoutNode = (tree: any): LayoutNode => ({
-    name: tree.tnRelation.rjName,
-    children: tree.tnChildren.map(backendTreeToLayoutNode),
-  });
+  // --- Orchestrated Workflows ---
 
   const normalizeRelation = (
     relationId: TableId,
@@ -279,59 +213,31 @@ const make = Effect.gen(function* (_) {
       const rel = relOpt.value;
       const anchor = rel.position;
 
-      const payload = {
-        nrRelation: {
-          rjName: rel.name,
-          rjAttributes: rel.attributes,
-          rjFDs: rel.fds.map((fd) => ({ fjLhs: fd.lhs, fjRhs: fd.rhs })),
-        },
-        nrStrategy: strategy,
-        nrIncludeTree: true,
-      };
+      // 1. Call API
+      const result = yield* api.normalize({ relation: rel, strategy });
 
-      const url = `${API_BASE_URL}/api/normalize`;
-      const response = yield* Effect.tryPromise({
-        try: () =>
-          fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          }).then((res) => res.json()),
-        catch: (e) => new NetworkError({ url, cause: e }),
-      });
-
-      const result = yield* Schema.decodeUnknown(BackendDecompositionResult)(response).pipe(
-        Effect.mapError(
-          (e) => new DecodeError({ schema: "BackendDecompositionResult", message: String(e) })
-        )
-      );
-
-      // 1. Calculate positions using tree layout if available
+      // 2. Logic: Calculate Layout
       let positions: Map<string, Position>;
-
       if (Option.isSome(result.nresTree)) {
-        // Use tree layout from decomposition result
-        const layoutNode = backendTreeToLayoutNode(result.nresTree.value);
+        const layoutNode = Logic.backendTreeToLayoutNode(result.nresTree.value);
         const layoutResults = layoutTree(layoutNode, anchor);
         positions = new Map(layoutResults.map((l) => [l.name, l.position]));
       } else {
-        // Fallback to grid layout
         const names = result.nresRelations.map((r) => r.rjName);
         const layoutResults = layoutGrid(names, anchor);
         positions = new Map(layoutResults.map((l) => [l.name, l.position]));
       }
 
-      // 2. Create new relations with tree-based positions
+      // 3. Logic: Map to Frontend Relations
       const newRelations = result.nresRelations.map((br) =>
-        toRelation(br, positions.get(br.rjName) ?? anchor)
+        Logic.toRelation(br, positions.get(br.rjName) ?? anchor)
       );
 
-      // 3. Build edge migration maps
+      // 4. Logic: Link Migration
       const inboundMigrations = new Map<CrossTableFDId, TableId>();
       const outboundMigrations = new Map<CrossTableFDId, TableId>();
 
       for (const [edgeId, ctfd] of HashMap.entries(ws.crossTableFDs)) {
-        // Inbound edges: pointing TO the decomposed table
         if (ctfd.toTableId === relationId) {
           const sourceRel = HashMap.get(ws.relations, ctfd.fromTableId);
           if (Option.isSome(sourceRel)) {
@@ -341,8 +247,6 @@ const make = Effect.gen(function* (_) {
             }
           }
         }
-
-        // Outbound edges: FROM the decomposed table
         if (ctfd.fromTableId === relationId) {
           const targetRel = HashMap.get(ws.relations, ctfd.toTableId);
           if (Option.isSome(targetRel)) {
@@ -354,13 +258,13 @@ const make = Effect.gen(function* (_) {
         }
       }
 
-      // 4. Apply decomposition with edge migrations
+      // 5. Update State
       yield* Ref.update(
         state,
         Actions.decomposeRelation(relationId, newRelations, inboundMigrations, outboundMigrations)
       );
 
-      // 5. Publish event
+      // 6. Publish Events
       const newIds = newRelations.map((r) => r.id);
       yield* PubSub.publish(events, { _tag: "NORMALIZATION_COMPLETED", oldId: relationId, newIds });
 
@@ -373,126 +277,70 @@ const make = Effect.gen(function* (_) {
 
       const currentState = yield* Ref.get(state);
       const ws = currentState.present;
-
-      // Convert HashMap to array for API
       const relationsArray = Array.from(HashMap.values(ws.relations));
 
-      const url = `${API_BASE_URL}/api/workspace`;
-      const response = yield* Effect.tryPromise({
-        try: () =>
-          fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              wrRelations: relationsArray.map((r) => ({
-                rjName: r.name,
-                rjAttributes: r.attributes,
-                rjFDs: r.fds.map((fd) => ({
-                  fjLhs: fd.lhs,
-                  fjRhs: fd.rhs,
-                })),
-              })),
-              wrStrategy: strategy,
-            }),
-          }).then((res) => res.json()),
-        catch: (e) => new NetworkError({ url, cause: e }),
-      });
-
-      const result = yield* Schema.decodeUnknown(BackendWorkspaceResponse)(response).pipe(
-        Effect.mapError(
-          (e) => new DecodeError({ schema: "BackendWorkspaceResponse", message: String(e) })
-        )
-      );
+      // 1. Call API
+      const result = yield* api.optimize(relationsArray, strategy);
 
       if (result.wresSuccess) {
-        // Build name→ID map for backend→frontend translation
-        const nameToId = buildNameToIdMap(ws);
+        // 2. Logic: Map Response
+        const nameToId = Logic.buildNameToIdMap(ws);
+        const newHealth = Logic.mapBackendHealth(result.wresHealth, nameToId);
+        const newSuggestions = Logic.mapMergeSuggestions(result.wresMergeSuggestions, nameToId);
 
-        // Map backend health (name-based) to frontend (ID-based) HashMap
-        let newHealth = HashMap.empty<TableId, TableHealth>();
-        for (const h of result.wresHealth) {
-          const tableId = nameToId.get(h.thjTableName);
-          if (tableId) {
-            const health: TableHealth = {
-              tableId,
-              severity: (h.thjSeverity === "Critical"
-                ? "error"
-                : h.thjSeverity === "Warning"
-                  ? "warning"
-                  : "ok") as "ok" | "warning" | "error",
-              message: h.thjMessage,
-              suggestion: h.thjSuggestion,
-            };
-            newHealth = HashMap.set(newHealth, tableId, health);
-          }
-        }
-
-        // Map merge suggestions (name-based) to IDs
-        const newMergeSuggestions: MergeSuggestion[] = result.wresMergeSuggestions
-          .map(([n1, n2, reason]) => {
-            const id1 = nameToId.get(n1);
-            const id2 = nameToId.get(n2);
-            if (!id1 || !id2) {
-              return null;
-            }
-            return { tableId1: id1, tableId2: id2, reason };
-          })
-          .filter((s): s is NonNullable<typeof s> => s !== null);
-
-        yield* Ref.update(state, Actions.setAnalysisResults(newHealth, newMergeSuggestions, []));
+        // 3. Update State
+        yield* Ref.update(state, Actions.setAnalysisResults(newHealth, newSuggestions, []));
         yield* PubSub.publish(events, { _tag: "ANALYSIS_COMPLETED" });
       }
     });
 
   const analyzeRelation = (relation: Relation): Effect.Effect<void> =>
     Effect.gen(function* (_) {
-      const payload = {
-        arRelation: {
-          rjName: relation.name,
-          rjAttributes: relation.attributes,
-          rjFDs: relation.fds.map((fd) => ({ fjLhs: fd.lhs, fjRhs: fd.rhs })),
-        },
-      };
+      // 1. Call API
+      const result = yield* api.analyze(relation); // Errors propagated but we might want to swallow for silent updates
 
-      const url = `${API_BASE_URL}/api/analyze`;
-      const response = yield* Effect.tryPromise({
-        try: () =>
-          fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          }).then((res) => res.json()),
-        catch: () => ({ aresHealth: null }),
-      }).pipe(Effect.catchAll(() => Effect.succeed({ aresHealth: null } as any)));
+      // Handle potential null/failure gracefully as per original logic's intent (swallow error implies catchAll)
+      // For now, allow typed errors to bubble or handle them here.
+      // Original logic used catchAll and returned Success({ aresHealth: null }).
+      // Let's wrap this in a catch for UI resilience.
+    }).pipe(
+      // Re-implement the catchAll logic from original locally or modifying API signature?
+      // Keeping it simple: If API succeeds, we update.
+      Effect.catchAll(() => Effect.succeed<void>(void 0)), // Swallow errors for background analysis
+      Effect.flatMap((_) => {
+        // Since we swallowed error, we need to restructure.
+        // Let's actually do the call inside.
+        return Effect.gen(function* (_) {
+          const apiResult = yield* api.analyze(relation).pipe(
+            Effect.catchAll(() =>
+              Effect.succeed({
+                aresSuccess: false,
+                aresHealth: Option.none(),
+                aresCandidateKeys: [],
+                aresIsBCNF: false,
+                aresIs3NF: false,
+                aresError: Option.none(),
+              } as BackendAnalyzeResponse)
+            )
+          );
 
-      const result = yield* Schema.decodeUnknown(BackendAnalyzeResponse)(response).pipe(
-        Effect.catchAll(() => Effect.succeed({ aresHealth: Option.none() } as any))
-      );
+          const healthOpt = apiResult.aresHealth;
+          if (Option.isSome(healthOpt)) {
+            const newHealth = Logic.mapSingleHealth(healthOpt.value, relation.id);
 
-      const healthOpt = result.aresHealth;
-      if (Option.isSome(healthOpt)) {
-        const h = healthOpt.value as any;
-        const newHealth: TableHealth = {
-          tableId: relation.id,
-          severity: (h.hjLevel === "Critical"
-            ? "error"
-            : h.hjLevel === "Warning"
-              ? "warning"
-              : "ok") as "ok" | "warning" | "error",
-          message: h.hjMessage,
-          suggestion: h.hjSuggestion,
-        };
-
-        yield* Ref.update(state, (s: WorkspaceState) => ({
-          ...s,
-          present: {
-            ...s.present,
-            health: HashMap.set(s.present.health, relation.id, newHealth),
-          },
-        }));
-        yield* PubSub.publish(events, { _tag: "STATE_CHANGED" });
-      }
-    });
+            // Update State
+            yield* Ref.update(state, (s: WorkspaceState) => ({
+              ...s,
+              present: {
+                ...s.present,
+                health: HashMap.set(s.present.health, relation.id, newHealth),
+              },
+            }));
+            yield* PubSub.publish(events, { _tag: "STATE_CHANGED" });
+          }
+        });
+      })
+    );
 
   return {
     state,

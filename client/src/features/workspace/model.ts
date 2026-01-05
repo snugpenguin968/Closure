@@ -155,15 +155,25 @@ export interface BackendTreeNode {
   readonly tnChildren: ReadonlyArray<BackendTreeNode>;
 }
 
-export const BackendTreeNode: Schema.Schema<BackendTreeNode, any> = Schema.suspend(() =>
-  Schema.Struct({
-    tnRelation: BackendRelation,
-    tnSplitFD: Schema.OptionFromNullOr(
-      Schema.Struct({ fjLhs: Schema.Array(Schema.String), fjRhs: Schema.Array(Schema.String) })
-    ),
-    tnChildren: Schema.Array(BackendTreeNode),
-  })
-);
+export interface BackendTreeNodeEncoded {
+  readonly tnRelation: Schema.Schema.Encoded<typeof BackendRelation>;
+  readonly tnSplitFD: {
+    readonly fjLhs: ReadonlyArray<string>;
+    readonly fjRhs: ReadonlyArray<string>;
+  } | null;
+  readonly tnChildren: ReadonlyArray<BackendTreeNodeEncoded>;
+}
+
+export const BackendTreeNode: Schema.Schema<BackendTreeNode, BackendTreeNodeEncoded> =
+  Schema.suspend(() =>
+    Schema.Struct({
+      tnRelation: BackendRelation,
+      tnSplitFD: Schema.OptionFromNullOr(
+        Schema.Struct({ fjLhs: Schema.Array(Schema.String), fjRhs: Schema.Array(Schema.String) })
+      ),
+      tnChildren: Schema.Array(BackendTreeNode),
+    })
+  );
 
 export const BackendDecompositionResult = Schema.Struct({
   nresSuccess: Schema.Boolean,
@@ -200,3 +210,14 @@ export const BackendWorkspaceResponse = Schema.Struct({
   wresMergeSuggestions: Schema.Array(Schema.Tuple(Schema.String, Schema.String, Schema.String)),
   wresError: Schema.OptionFromNullOr(Schema.String),
 });
+
+export const BackendAnalyzeResponse = Schema.Struct({
+  aresSuccess: Schema.Boolean,
+  aresHealth: Schema.OptionFromNullOr(BackendHealth),
+  aresCandidateKeys: Schema.Array(Schema.Array(Schema.String)),
+  aresIsBCNF: Schema.Boolean,
+  aresIs3NF: Schema.Boolean,
+  aresError: Schema.OptionFromNullOr(Schema.String),
+});
+
+export type BackendAnalyzeResponse = Schema.Schema.Type<typeof BackendAnalyzeResponse>;
