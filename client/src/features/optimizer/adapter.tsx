@@ -18,6 +18,7 @@ import {
   type Attribute,
   type TableId,
   type BackendTreeNode,
+  type FDId,
 } from "../workspace/model";
 
 export const OptimizerAdapter = (): React.ReactElement => {
@@ -47,7 +48,7 @@ export const OptimizerAdapter = (): React.ReactElement => {
     });
 
     Effect.runPromise(program);
-    return () => {};
+    return () => { };
   }, [optimizerService]);
 
   const onStrategyChange = (strategy: OptimizationStrategy): void => {
@@ -78,12 +79,14 @@ export const OptimizerAdapter = (): React.ReactElement => {
                 name: node.tnRelation.rjName,
                 attributes: node.tnRelation.rjAttributes.map((a) => a as Attribute),
                 fds: node.tnRelation.rjFDs.map((fd) => ({
+                  id: crypto.randomUUID() as FDId,
                   lhs: fd.fjLhs.map((a) => a as Attribute),
                   rhs: fd.fjRhs.map((a) => a as Attribute),
                 })),
                 position: { x: 0, y: 0 },
               },
               splitFD: Option.map(node.tnSplitFD, (fd) => ({
+                id: crypto.randomUUID() as FDId,
                 lhs: fd.fjLhs.map((a) => a as Attribute),
                 rhs: fd.fjRhs.map((a) => a as Attribute),
               })),

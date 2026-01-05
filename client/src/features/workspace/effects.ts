@@ -4,6 +4,7 @@
  *
  * DESIGN: This layer handles the mapping between backend (name-based)
  * and frontend (ID-based) representations.
+ * Uses typed errors for exhaustive error handling.
  * Uses granular PubSub events for fine-grained reactivity.
  */
 
@@ -17,6 +18,9 @@ import {
   type TableId,
   type MergeSuggestion,
   type Position,
+  type FDId,
+  type CrossTableFDId,
+  type TableHealth,
   BackendDecompositionResult,
   BackendWorkspaceResponse,
   Attribute,
@@ -26,6 +30,7 @@ import {
 import { type WorkspaceState, initialState } from "./state";
 import * as Actions from "./actions";
 import { API_BASE_URL } from "./config";
+import { NetworkError, DecodeError, type WorkspaceError } from "./errors";
 
 // -- Schemas --
 
@@ -47,8 +52,8 @@ export type WorkspaceEvent =
   | { _tag: "RELATION_DELETED"; id: TableId }
   | { _tag: "RELATION_MOVED"; id: TableId; position: Position }
   // Cross-table relationships
-  | { _tag: "CROSS_TABLE_FD_ADDED"; fromId: TableId; toId: TableId }
-  | { _tag: "CROSS_TABLE_FD_DELETED"; index: number }
+  | { _tag: "CROSS_TABLE_FD_ADDED"; id: CrossTableFDId; fromId: TableId; toId: TableId }
+  | { _tag: "CROSS_TABLE_FD_DELETED"; id: CrossTableFDId }
   // Analysis
   | { _tag: "ANALYSIS_STARTED" }
   | { _tag: "ANALYSIS_COMPLETED" }
@@ -60,12 +65,6 @@ export type WorkspaceEvent =
   | { _tag: "REDO" }
   // Generic fallback for bulk updates
   | { _tag: "STATE_CHANGED" };
-
-// -- Errors --
-
-export class ApiError extends Schema.TaggedError<ApiError>()("ApiError", {
-  message: Schema.String,
-}) {}
 
 // -- Service Definition --
 
@@ -89,15 +88,15 @@ export interface WorkspaceService {
   readonly addAttribute: (relationId: TableId, name: string) => Effect.Effect<void>;
   readonly deleteAttribute: (relationId: TableId, name: string) => Effect.Effect<void>;
   readonly addFD: (relationId: TableId, lhs: string[], rhs: string[]) => Effect.Effect<void>;
-  readonly deleteFD: (relationId: TableId, index: number) => Effect.Effect<void>;
+  readonly deleteFD: (relationId: TableId, fdId: FDId) => Effect.Effect<void>;
   readonly addCrossTableFD: (fromTableId: TableId, toTableId: TableId) => Effect.Effect<void>;
-  readonly deleteCrossTableFD: (index: number) => Effect.Effect<void>;
+  readonly deleteCrossTableFD: (id: CrossTableFDId) => Effect.Effect<void>;
   readonly normalizeRelation: (
     relationId: TableId,
     strategy: OptimizationStrategy
-  ) => Effect.Effect<typeof BackendDecompositionResult.Type | undefined, ApiError>;
+  ) => Effect.Effect<typeof BackendDecompositionResult.Type | undefined, WorkspaceError>;
   readonly updateRelationPosition: (id: TableId, x: number, y: number) => Effect.Effect<void>;
-  readonly optimizeWorkspace: (strategy: OptimizationStrategy) => Effect.Effect<void, ApiError>;
+  readonly optimizeWorkspace: (strategy: OptimizationStrategy) => Effect.Effect<void, WorkspaceError>;
   readonly mergeRelations: (id1: TableId, id2: TableId) => Effect.Effect<void>;
   readonly analyzeRelation: (relation: Relation) => Effect.Effect<void>;
 }
@@ -188,21 +187,37 @@ const make = Effect.gen(function* (_) {
       id: relationId,
     });
 
-  const deleteFD = (relationId: TableId, index: number) =>
-    updateAndPublish(Actions.deleteFD(relationId, index), {
+  const deleteFD = (relationId: TableId, fdId: FDId) =>
+    updateAndPublish(Actions.deleteFD(relationId, fdId), {
       _tag: "RELATION_UPDATED",
       id: relationId,
     });
 
   const addCrossTableFD = (fromTableId: TableId, toTableId: TableId) =>
-    updateAndPublish(Actions.addCrossTableFD(fromTableId, toTableId), {
-      _tag: "CROSS_TABLE_FD_ADDED",
-      fromId: fromTableId,
-      toId: toTableId,
+    Effect.gen(function* (_) {
+      yield* Ref.update(state, Actions.addCrossTableFD(fromTableId, toTableId));
+      // Find the just-added crossTableFD
+      const currentState = yield* Ref.get(state);
+      const ws = currentState.present;
+      let addedId: CrossTableFDId | undefined;
+      for (const [id, ctfd] of HashMap.entries(ws.crossTableFDs)) {
+        if (ctfd.fromTableId === fromTableId && ctfd.toTableId === toTableId) {
+          addedId = id;
+          break;
+        }
+      }
+      if (addedId) {
+        yield* PubSub.publish(events, {
+          _tag: "CROSS_TABLE_FD_ADDED",
+          id: addedId,
+          fromId: fromTableId,
+          toId: toTableId,
+        });
+      }
     });
 
-  const deleteCrossTableFD = (index: number) =>
-    updateAndPublish(Actions.deleteCrossTableFD(index), { _tag: "CROSS_TABLE_FD_DELETED", index });
+  const deleteCrossTableFD = (id: CrossTableFDId) =>
+    updateAndPublish(Actions.deleteCrossTableFD(id), { _tag: "CROSS_TABLE_FD_DELETED", id });
 
   const updateRelationPosition = (id: TableId, x: number, y: number) =>
     Effect.gen(function* (_) {
@@ -222,6 +237,8 @@ const make = Effect.gen(function* (_) {
 
   const asAttribute = (s: string): Attribute => s as Attribute;
 
+  const generateFDId = (): FDId => crypto.randomUUID() as FDId;
+
   const toRelation = (
     br: typeof BackendRelation.Type,
     position: Position = { x: 0, y: 0 }
@@ -230,6 +247,7 @@ const make = Effect.gen(function* (_) {
     name: br.rjName,
     attributes: br.rjAttributes.map((s) => asAttribute(s)),
     fds: br.rjFDs.map((fd) => ({
+      id: generateFDId(),
       lhs: fd.fjLhs.map((s) => asAttribute(s)),
       rhs: fd.fjRhs.map((s) => asAttribute(s)),
     })),
@@ -239,7 +257,7 @@ const make = Effect.gen(function* (_) {
   const normalizeRelation = (
     relationId: TableId,
     strategy: OptimizationStrategy
-  ): Effect.Effect<typeof BackendDecompositionResult.Type | undefined, ApiError> =>
+  ): Effect.Effect<typeof BackendDecompositionResult.Type | undefined, WorkspaceError> =>
     Effect.gen(function* (_) {
       const currentState = yield* Ref.get(state);
       const ws = currentState.present;
@@ -261,18 +279,19 @@ const make = Effect.gen(function* (_) {
         nrIncludeTree: true,
       };
 
+      const url = `${API_BASE_URL}/api/normalize`;
       const response = yield* Effect.tryPromise({
         try: () =>
-          fetch(`${API_BASE_URL}/api/normalize`, {
+          fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           }).then((res) => res.json()),
-        catch: (e) => new ApiError({ message: String(e) }),
+        catch: (e) => new NetworkError({ url, cause: e }),
       });
 
       const result = yield* Schema.decodeUnknown(BackendDecompositionResult)(response).pipe(
-        Effect.mapError((e) => new ApiError({ message: String(e) }))
+        Effect.mapError((e) => new DecodeError({ schema: "BackendDecompositionResult", message: String(e) }))
       );
 
       // Create new relations with positions spread from anchor
@@ -292,7 +311,7 @@ const make = Effect.gen(function* (_) {
       return result;
     });
 
-  const optimizeWorkspace = (strategy: OptimizationStrategy): Effect.Effect<void, ApiError> =>
+  const optimizeWorkspace = (strategy: OptimizationStrategy): Effect.Effect<void, WorkspaceError> =>
     Effect.gen(function* (_) {
       yield* PubSub.publish(events, { _tag: "ANALYSIS_STARTED" });
 
@@ -302,9 +321,10 @@ const make = Effect.gen(function* (_) {
       // Convert HashMap to array for API
       const relationsArray = Array.from(HashMap.values(ws.relations));
 
+      const url = `${API_BASE_URL}/api/workspace`;
       const response = yield* Effect.tryPromise({
         try: () =>
-          fetch(`${API_BASE_URL}/api/workspace`, {
+          fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -319,23 +339,23 @@ const make = Effect.gen(function* (_) {
               wrStrategy: strategy,
             }),
           }).then((res) => res.json()),
-        catch: (e) => new ApiError({ message: String(e) }),
+        catch: (e) => new NetworkError({ url, cause: e }),
       });
 
       const result = yield* Schema.decodeUnknown(BackendWorkspaceResponse)(response).pipe(
-        Effect.mapError((e) => new ApiError({ message: String(e) }))
+        Effect.mapError((e) => new DecodeError({ schema: "BackendWorkspaceResponse", message: String(e) }))
       );
 
       if (result.wresSuccess) {
         // Build name→ID map for backend→frontend translation
         const nameToId = buildNameToIdMap(ws);
 
-        // Map backend health (name-based) to frontend (ID-based)
-        const newHealth = result.wresHealth
-          .map((h) => {
-            const tableId = nameToId.get(h.thjTableName);
-            if (!tableId) return null;
-            return {
+        // Map backend health (name-based) to frontend (ID-based) HashMap
+        let newHealth = HashMap.empty<TableId, TableHealth>();
+        for (const h of result.wresHealth) {
+          const tableId = nameToId.get(h.thjTableName);
+          if (tableId) {
+            const health: TableHealth = {
               tableId,
               severity: (h.thjSeverity === "Critical"
                 ? "error"
@@ -345,8 +365,9 @@ const make = Effect.gen(function* (_) {
               message: h.thjMessage,
               suggestion: h.thjSuggestion,
             };
-          })
-          .filter((h): h is NonNullable<typeof h> => h !== null);
+            newHealth = HashMap.set(newHealth, tableId, health);
+          }
+        }
 
         // Map merge suggestions (name-based) to IDs
         const newMergeSuggestions: MergeSuggestion[] = result.wresMergeSuggestions
@@ -373,15 +394,16 @@ const make = Effect.gen(function* (_) {
         },
       };
 
+      const url = `${API_BASE_URL}/api/analyze`;
       const response = yield* Effect.tryPromise({
         try: () =>
-          fetch(`${API_BASE_URL}/api/analyze`, {
+          fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           }).then((res) => res.json()),
-        catch: (e) => new ApiError({ message: String(e) }),
-      }).pipe(Effect.catchAll(() => Effect.succeed({} as any)));
+        catch: () => ({ aresHealth: null }),
+      }).pipe(Effect.catchAll(() => Effect.succeed({ aresHealth: null } as any)));
 
       const result = yield* Schema.decodeUnknown(BackendAnalyzeResponse)(response).pipe(
         Effect.catchAll(() => Effect.succeed({ aresHealth: Option.none() } as any))
@@ -390,7 +412,7 @@ const make = Effect.gen(function* (_) {
       const healthOpt = result.aresHealth;
       if (Option.isSome(healthOpt)) {
         const h = healthOpt.value as any;
-        const newHealth = {
+        const newHealth: TableHealth = {
           tableId: relation.id,
           severity: (h.hjLevel === "Critical"
             ? "error"
@@ -405,7 +427,7 @@ const make = Effect.gen(function* (_) {
           ...s,
           present: {
             ...s.present,
-            health: [...s.present.health.filter((lh) => lh.tableId !== relation.id), newHealth],
+            health: HashMap.set(s.present.health, relation.id, newHealth),
           },
         }));
         yield* PubSub.publish(events, { _tag: "STATE_CHANGED" });
