@@ -285,7 +285,7 @@ const make = Effect.gen(function* (_) {
       if (result.wresSuccess) {
         // 2. Logic: Map Response
         const nameToId = Logic.buildNameToIdMap(ws);
-        const newHealth = Logic.mapBackendHealth(result.wresHealth, nameToId);
+        const newHealth = Logic.mapBackendHealth(result.wresHealth, nameToId, strategy);
         const newSuggestions = Logic.mapMergeSuggestions(result.wresMergeSuggestions, nameToId);
 
         // 3. Update State

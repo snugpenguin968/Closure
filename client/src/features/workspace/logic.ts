@@ -72,12 +72,19 @@ type BackendTableHealthList = typeof BackendWorkspaceResponse.Type.wresHealth;
 
 export const mapBackendHealth = (
   backendHealth: BackendTableHealthList,
-  nameToId: Map<string, TableId>
+  nameToId: Map<string, TableId>,
+  strategy?: "bcnf" | "3nf" | "performance"
 ): HashMap.HashMap<TableId, TableHealth> => {
   let newHealth = HashMap.empty<TableId, TableHealth>();
   for (const h of backendHealth) {
     const tableId = nameToId.get(h.thjTableName);
     if (tableId) {
+      let message = h.thjMessage;
+      // Contextualize message based on strategy
+      if (strategy === "3nf" && message === "Table is in BCNF") {
+        message = "Table satisfies 3NF";
+      }
+
       const health: TableHealth = {
         tableId,
         severity: (h.thjSeverity === "Critical"
@@ -85,7 +92,7 @@ export const mapBackendHealth = (
           : h.thjSeverity === "Warning"
             ? "warning"
             : "ok") as "ok" | "warning" | "error",
-        message: h.thjMessage,
+        message,
         suggestion: h.thjSuggestion,
       };
       newHealth = HashMap.set(newHealth, tableId, health);

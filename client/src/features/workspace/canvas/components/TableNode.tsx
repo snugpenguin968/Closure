@@ -42,12 +42,12 @@ export const TableNode = ({ data }: { data: TableData }): React.ReactElement => 
         >
             <Card
                 className={`border-2 shadow-lg bg-white/95 backdrop-blur-sm ${data.health?.severity === "error"
-                        ? "border-red-400"
-                        : data.health?.severity === "warning"
-                            ? data.health?.message.includes("3NF")
-                                ? "border-blue-400" // 3NF is acceptable/info
-                                : "border-amber-400" // True warning
-                            : "border-emerald-400" // BCNF/Healthy
+                    ? "border-red-400"
+                    : data.health?.severity === "warning"
+                        ? data.health?.message.includes("3NF")
+                            ? "border-blue-400" // 3NF is acceptable/info
+                            : "border-amber-400" // True warning
+                        : "border-emerald-400" // BCNF/Healthy
                     }`}
             >
                 {/* Header */}
@@ -244,15 +244,15 @@ export const TableNode = ({ data }: { data: TableData }): React.ReactElement => 
 
                     {/* Health Message */}
                     {data.health &&
-                        (data.health.severity !== "ok" || data.health.message.includes("BCNF")) && (
+                        (data.health.severity !== "ok" || data.health.message.includes("BCNF") || data.health.message.includes("3NF")) && (
                             <div
                                 className={`mt-3 p-2 rounded text-xs ${data.health.severity === "error"
-                                        ? "bg-red-50 border border-red-200 text-red-700"
-                                        : data.health.severity === "warning"
-                                            ? data.health.message.includes("3NF")
-                                                ? "bg-blue-50 border border-blue-200 text-blue-700"
-                                                : "bg-amber-50 border border-amber-200 text-amber-700"
-                                            : "bg-emerald-50 border border-emerald-200 text-emerald-700"
+                                    ? "bg-red-50 border border-red-200 text-red-700"
+                                    : data.health.severity === "warning"
+                                        ? data.health.message.includes("3NF")
+                                            ? "bg-blue-50 border border-blue-200 text-blue-700"
+                                            : "bg-amber-50 border border-amber-200 text-amber-700"
+                                        : "bg-emerald-50 border border-emerald-200 text-emerald-700"
                                     }`}
                             >
                                 <span className="font-medium">

@@ -52,11 +52,15 @@ export const DashboardView = ({
                 >
                     💾 SQL
                 </Button>
-                <div className="flex bg-white/90 backdrop-blur shadow-lg rounded-md border border-slate-200 isolate">
+                <div
+                    className="flex bg-white/90 backdrop-blur shadow-lg rounded-md border border-slate-200 isolate items-center"
+                    title="Target Normal Form for Suggestions"
+                >
+                    <span className="text-[10px] font-bold text-slate-400 pl-2 uppercase tracking-wider">Target:</span>
                     <select
                         value={strategy}
                         onChange={(e) => setStrategy(e.target.value as "bcnf" | "3nf")}
-                        className="bg-transparent text-xs font-bold text-slate-600 px-3 py-2 border-r border-slate-200 outline-none cursor-pointer hover:bg-slate-50 rounded-l-md appearance-none text-center"
+                        className="bg-transparent text-xs font-bold text-slate-600 px-2 py-2 border-r border-slate-200 outline-none cursor-pointer hover:bg-slate-50 rounded-l-md appearance-none text-center min-w-[60px]"
                     >
                         <option value="bcnf">BCNF</option>
                         <option value="3nf">3NF</option>

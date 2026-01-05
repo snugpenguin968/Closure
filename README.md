@@ -76,8 +76,11 @@ npm run dev
         *   **Suggestions**: Intelligent merges or splits.
         *   **Warnings**: Potential anomalies.
 3.  **Optimize**:
-    *   Select a strategy (BCNF for strict, 3NF for performance).
-    *   Let Closure automatically decompose your tables to fix anomalies without data loss.
+    *   Select a strategy:
+        *   **BCNF (Strict)**: Maximum consistency, no redundancy. Best for write-heavy apps.
+        *   **3NF (Balanced)**: Standard industry target. allows minor redundancy for convenience.
+        *   **Performance (Speed)**: Prioritizes **Read Speed** (denormalization). Allows redundancy to reduce JOINs, ideal for analytics or high-traffic read APIs.
+    *   Let Closure automatically decompose your tables based on your choice.
 4.  **Export**:
     *   Export the result as production-ready **SQL**.
 
