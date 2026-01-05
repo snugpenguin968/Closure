@@ -3,7 +3,7 @@
  * Converts workspace schema to SQL DDL statements.
  */
 
-import { type Workspace, type Relation, type ForeignKey } from "./model";
+import { type Workspace, type Relation } from "./model";
 
 export const generateSQL = (workspace: Workspace): string => {
     const tables = workspace.relations.map(generateTableSQL);
@@ -48,15 +48,24 @@ const generateTableSQL = (relation: Relation): string => {
 };
 
 const generateForeignKeySQL = (workspace: Workspace): string[] => {
-    return workspace.foreignKeys.map(fk => {
-        const fromTable = snakeCase(fk.fromTable);
-        const toTable = snakeCase(fk.toTable);
-        const fromCol = snakeCase(fk.fromAttribute);
-        const toCol = snakeCase(fk.toAttribute);
-        const constraintName = `fk_${fromTable}_${fromCol}`;
+    // Build ID→Name lookup
+    const idToName = new Map(workspace.relations.map(r => [r.id, r.name]));
 
-        return `ALTER TABLE ${fromTable} ADD CONSTRAINT ${constraintName} FOREIGN KEY (${fromCol}) REFERENCES ${toTable} (${toCol});`;
-    });
+    return workspace.foreignKeys
+        .map(fk => {
+            const fromName = idToName.get(fk.fromTableId);
+            const toName = idToName.get(fk.toTableId);
+            if (!fromName || !toName) return '';
+
+            const fromTable = snakeCase(fromName);
+            const toTable = snakeCase(toName);
+            const fromCol = snakeCase(fk.fromAttribute);
+            const toCol = snakeCase(fk.toAttribute);
+            const constraintName = `fk_${fromTable}_${fromCol}`;
+
+            return `ALTER TABLE ${fromTable} ADD CONSTRAINT ${constraintName} FOREIGN KEY (${fromCol}) REFERENCES ${toTable} (${toCol});`;
+        })
+        .filter(Boolean);
 };
 
 // Helpers

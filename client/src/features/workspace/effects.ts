@@ -1,6 +1,9 @@
 /**
  * Effects (Service Layer)
  * Orchestrates API calls, PubSub events, and State Actions.
+ * 
+ * DESIGN: This layer handles the mapping between backend (name-based) 
+ * and frontend (ID-based) representations.
  */
 
 import { Effect, Context, Layer, Ref, PubSub, Option } from "effect";
@@ -10,10 +13,11 @@ import {
   type Relation,
   type OptimizationStrategy,
   type BackendRelation,
+  type TableId,
+  type MergeSuggestion,
   BackendDecompositionResult,
   BackendWorkspaceResponse,
   Attribute,
-  type TableId,
   BackendHealth,
 } from "./model";
 
@@ -38,7 +42,7 @@ export type WorkspaceEvent =
   | { _tag: "DECOMPOSITION_RESULT_RECEIVED"; result: typeof BackendDecompositionResult.Type }
   | { _tag: "RELATION_ADDED"; relation: Relation }
   | { _tag: "RELATION_UPDATED"; relation: Relation }
-  | { _tag: "RELATION_DELETED"; id: string }
+  | { _tag: "RELATION_DELETED"; id: TableId }
   | { _tag: "NORMALIZATION_COMPLETED" }
   | { _tag: "WORKSPACE_OPTIMIZED" };
 
@@ -65,21 +69,21 @@ export interface WorkspaceService {
     x: number,
     y: number
   ) => Effect.Effect<void>;
-  readonly renameRelation: (id: string, newName: string) => Effect.Effect<void>;
-  readonly deleteRelation: (id: string) => Effect.Effect<void>;
-  readonly addAttribute: (relationId: string, name: string) => Effect.Effect<void>;
-  readonly deleteAttribute: (relationId: string, name: string) => Effect.Effect<void>;
-  readonly addFD: (relationId: string, lhs: string[], rhs: string[]) => Effect.Effect<void>;
-  readonly deleteFD: (relationId: string, index: number) => Effect.Effect<void>;
-  readonly addCrossTableFD: (fromTableId: string, toTableId: string) => Effect.Effect<void>;
+  readonly renameRelation: (id: TableId, newName: string) => Effect.Effect<void>;
+  readonly deleteRelation: (id: TableId) => Effect.Effect<void>;
+  readonly addAttribute: (relationId: TableId, name: string) => Effect.Effect<void>;
+  readonly deleteAttribute: (relationId: TableId, name: string) => Effect.Effect<void>;
+  readonly addFD: (relationId: TableId, lhs: string[], rhs: string[]) => Effect.Effect<void>;
+  readonly deleteFD: (relationId: TableId, index: number) => Effect.Effect<void>;
+  readonly addCrossTableFD: (fromTableId: TableId, toTableId: TableId) => Effect.Effect<void>;
   readonly deleteCrossTableFD: (index: number) => Effect.Effect<void>;
   readonly normalizeRelation: (
-    relationId: string,
+    relationId: TableId,
     strategy: OptimizationStrategy
   ) => Effect.Effect<typeof BackendDecompositionResult.Type | undefined, ApiError>;
-  readonly updateRelationPosition: (id: string, x: number, y: number) => Effect.Effect<void>;
+  readonly updateRelationPosition: (id: TableId, x: number, y: number) => Effect.Effect<void>;
   readonly optimizeWorkspace: (strategy: OptimizationStrategy) => Effect.Effect<void, ApiError>;
-  readonly mergeRelations: (name1: string, name2: string) => Effect.Effect<void>;
+  readonly mergeRelations: (id1: TableId, id2: TableId) => Effect.Effect<void>;
   readonly analyzeRelation: (relation: Relation) => Effect.Effect<void>;
 }
 
@@ -98,6 +102,10 @@ const make = Effect.gen(function* (_) {
       yield* PubSub.publish(events, { _tag: "STATE_UPDATED" });
     });
 
+  // Build name→ID lookup from current workspace
+  const buildNameToIdMap = (ws: Workspace): Map<string, TableId> =>
+    new Map(ws.relations.map(r => [r.name, r.id]));
+
   // --- History ---
   const undo = updateAndNotify(Actions.undo);
   const redo = updateAndNotify(Actions.redo);
@@ -112,36 +120,36 @@ const make = Effect.gen(function* (_) {
     y: number
   ) => updateAndNotify(Actions.addRelation(name, attributes, fds, x, y));
 
-  const deleteRelation = (id: string) =>
+  const deleteRelation = (id: TableId) =>
     Effect.gen(function* (_) {
       yield* Ref.update(state, Actions.deleteRelation(id));
       yield* PubSub.publish(events, { _tag: "STATE_UPDATED" });
     });
 
-  const renameRelation = (id: string, newName: string) => updateAndNotify(Actions.renameRelation(id, newName));
+  const renameRelation = (id: TableId, newName: string) => updateAndNotify(Actions.renameRelation(id, newName));
 
-  const addAttribute = (relationId: string, name: string) => updateAndNotify(Actions.addAttribute(relationId, name));
+  const addAttribute = (relationId: TableId, name: string) => updateAndNotify(Actions.addAttribute(relationId, name));
 
-  const deleteAttribute = (relationId: string, name: string) => updateAndNotify(Actions.deleteAttribute(relationId, name));
+  const deleteAttribute = (relationId: TableId, name: string) => updateAndNotify(Actions.deleteAttribute(relationId, name));
 
-  const addFD = (relationId: string, lhs: string[], rhs: string[]) => updateAndNotify(Actions.addFD(relationId, lhs, rhs));
+  const addFD = (relationId: TableId, lhs: string[], rhs: string[]) => updateAndNotify(Actions.addFD(relationId, lhs, rhs));
 
-  const deleteFD = (relationId: string, index: number) => updateAndNotify(Actions.deleteFD(relationId, index));
+  const deleteFD = (relationId: TableId, index: number) => updateAndNotify(Actions.deleteFD(relationId, index));
 
-  const addCrossTableFD = (fromTableId: string, toTableId: string) => updateAndNotify(Actions.addCrossTableFD(fromTableId, toTableId));
+  const addCrossTableFD = (fromTableId: TableId, toTableId: TableId) => updateAndNotify(Actions.addCrossTableFD(fromTableId, toTableId));
 
   const deleteCrossTableFD = (index: number) => updateAndNotify(Actions.deleteCrossTableFD(index));
 
-  const updateRelationPosition = (id: string, x: number, y: number) => Ref.update(state, Actions.updateRelationPosition(id, x, y)); // No notification needed for drag
+  const updateRelationPosition = (id: TableId, x: number, y: number) => Ref.update(state, Actions.updateRelationPosition(id, x, y));
 
-  const mergeRelations = (name1: string, name2: string) => updateAndNotify(Actions.mergeRelations(name1, name2));
+  const mergeRelations = (id1: TableId, id2: TableId) => updateAndNotify(Actions.mergeRelations(id1, id2));
 
   // --- Complex Effects (API) ---
 
   const asAttribute = (s: string): Attribute => s as Attribute;
 
-  const toRelation = (br: typeof BackendRelation.Type): Relation => ({
-    id: br.rjName as TableId,
+  const toRelation = (br: typeof BackendRelation.Type, existingId?: TableId): Relation => ({
+    id: existingId ?? (crypto.randomUUID() as TableId),
     name: br.rjName,
     attributes: br.rjAttributes.map((s) => asAttribute(s)),
     fds: br.rjFDs.map((fd) => ({
@@ -152,7 +160,7 @@ const make = Effect.gen(function* (_) {
   });
 
   const normalizeRelation = (
-    relationId: string,
+    relationId: TableId,
     strategy: OptimizationStrategy
   ): Effect.Effect<typeof BackendDecompositionResult.Type | undefined, ApiError> =>
     Effect.gen(function* (_) {
@@ -194,7 +202,7 @@ const make = Effect.gen(function* (_) {
         ...s.present,
         relations: [
           ...s.present.relations.filter(r => r.id !== relationId),
-          ...result.nresRelations.map(toRelation)
+          ...result.nresRelations.map(br => toRelation(br))
         ]
       }));
 
@@ -233,17 +241,35 @@ const make = Effect.gen(function* (_) {
       );
 
       if (result.wresSuccess) {
-        const newRelations = result.wresResults.flatMap(([_, rels]) => rels.map(toRelation));
+        // Build name→ID map for backend→frontend translation
+        const nameToId = buildNameToIdMap(ws);
 
-        const newHealth = result.wresHealth.map((h) => ({
-          tableName: h.thjTableName,
-          severity: (h.thjSeverity === "Critical" ? "error" : h.thjSeverity === "Warning" ? "warning" : "ok") as "ok" | "warning" | "error",
-          message: h.thjMessage,
-          suggestion: h.thjSuggestion,
-        }));
+        // Map backend health (name-based) to frontend (ID-based)
+        const newHealth = result.wresHealth
+          .map((h) => {
+            const tableId = nameToId.get(h.thjTableName);
+            if (!tableId) return null;
+            return {
+              tableId,
+              severity: (h.thjSeverity === "Critical" ? "error" : h.thjSeverity === "Warning" ? "warning" : "ok") as "ok" | "warning" | "error",
+              message: h.thjMessage,
+              suggestion: h.thjSuggestion,
+            };
+          })
+          .filter((h): h is NonNullable<typeof h> => h !== null);
+
+        // Map merge suggestions (name-based) to IDs
+        const newMergeSuggestions: MergeSuggestion[] = result.wresMergeSuggestions
+          .map(([n1, n2, reason]) => {
+            const id1 = nameToId.get(n1);
+            const id2 = nameToId.get(n2);
+            if (!id1 || !id2) return null;
+            return { tableId1: id1, tableId2: id2, reason };
+          })
+          .filter((s): s is NonNullable<typeof s> => s !== null);
 
         // Update state with results
-        yield* Ref.update(state, Actions.setAnalysisResults(newRelations, newHealth, result.wresMergeSuggestions, []));
+        yield* Ref.update(state, Actions.setAnalysisResults(newHealth, newMergeSuggestions, []));
 
         yield* PubSub.publish(events, { _tag: "STATE_UPDATED" });
       }
@@ -259,7 +285,6 @@ const make = Effect.gen(function* (_) {
         },
       };
 
-      // We explicitly ignore errors here so that the UI doesn't break if the background check fails
       const response = yield* Effect.tryPromise({
         try: () =>
           fetch("http://localhost:8080/api/analyze", {
@@ -268,10 +293,8 @@ const make = Effect.gen(function* (_) {
             body: JSON.stringify(payload),
           }).then((res) => res.json()),
         catch: (e) => new ApiError({ message: String(e) }),
-      }).pipe(Effect.catchAll(() => Effect.succeed({} as any))); // Fallback
+      }).pipe(Effect.catchAll(() => Effect.succeed({} as any)));
 
-      // If we got a fallback (empty object) or invalid response, schema decode might fail
-      // We'll wrap the decode in an Option or catch error
       const result = yield* Schema.decodeUnknown(BackendAnalyzeResponse)(response).pipe(
         Effect.catchAll(() => Effect.succeed({ aresHealth: Option.none() } as any))
       );
@@ -280,7 +303,7 @@ const make = Effect.gen(function* (_) {
       if (Option.isSome(healthOpt)) {
         const h = healthOpt.value as any;
         const newHealth = {
-          tableName: relation.name,
+          tableId: relation.id,
           severity: (h.hjLevel === "Critical" ? "error" : h.hjLevel === "Warning" ? "warning" : "ok") as "ok" | "warning" | "error",
           message: h.hjMessage,
           suggestion: h.hjSuggestion,
@@ -291,7 +314,7 @@ const make = Effect.gen(function* (_) {
           present: {
             ...s.present,
             health: [
-              ...s.present.health.filter((lh) => lh.tableName !== relation.name),
+              ...s.present.health.filter((lh) => lh.tableId !== relation.id),
               newHealth,
             ],
           }

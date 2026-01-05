@@ -67,7 +67,7 @@ export const OptimizerAdapter = (): React.ReactElement => {
       Effect.runPromise(
         Effect.gen(function* (_) {
           const result = yield* workspaceService.normalizeRelation(
-            targetId,
+            targetId as TableId,
             state.selectedStrategy
           );
           if (result) {
@@ -91,7 +91,7 @@ export const OptimizerAdapter = (): React.ReactElement => {
             });
 
             const health: Option.Option<TableHealth> = Option.map(result.nresHealth, (h) => ({
-              tableName: targetId,
+              tableId: targetId as TableId,
               severity: (h.hjLevel === "critical" ? "error" : h.hjLevel) as "ok" | "warning" | "error",
               message: h.hjMessage,
               suggestion: h.hjSuggestion,

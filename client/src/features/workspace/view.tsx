@@ -45,6 +45,15 @@ export interface TableData {
     onOptimize: () => void;
 }
 
+// Merge suggestion with resolved display names
+export interface MergeSuggestionDisplay {
+    id1: string;
+    id2: string;
+    name1: string;
+    name2: string;
+    reason: string;
+}
+
 export interface WorkspaceCanvasProps {
     nodes: Node[];
     edges: Edge[];
@@ -57,9 +66,9 @@ export interface WorkspaceCanvasProps {
     onAddTable: () => void;
     onExportSQL: () => void;
     isAnalyzing?: boolean;
-    mergeSuggestions: readonly (readonly [string, string, string])[];
+    mergeSuggestions: readonly MergeSuggestionDisplay[];
     analysisWarnings: readonly string[];
-    onMergeRelations: (t1: string, t2: string) => void;
+    onMergeRelations: (id1: string, id2: string) => void;
 }
 // -- Relationship Builder Component --
 const RelationshipBuilder = ({
@@ -457,9 +466,9 @@ const SuggestionsCard = ({
     onClose,
     onApply,
 }: {
-    suggestions: readonly (readonly [string, string, string])[];
+    suggestions: readonly MergeSuggestionDisplay[];
     onClose: () => void;
-    onApply: (t1: string, t2: string) => void;
+    onApply: (id1: string, id2: string) => void;
 }) => (
     <Card className="w-80 shadow-xl pointer-events-auto bg-white/95 backdrop-blur border-indigo-100">
         <CardHeader className="p-3 border-b border-indigo-50 bg-gradient-to-r from-indigo-50 to-purple-50 flex flex-row items-center justify-between space-y-0">
@@ -475,19 +484,19 @@ const SuggestionsCard = ({
         </CardHeader>
         <CardContent className="p-3 max-h-60 overflow-y-auto">
             <div className="flex flex-col gap-2">
-                {suggestions.map(([t1, t2, reason], i) => (
+                {suggestions.map((s, i) => (
                     <div
                         key={i}
                         className="text-xs p-2 bg-indigo-50 border border-indigo-100 rounded text-indigo-900 flex justify-between items-center"
                     >
                         <div>
-                            <span className="font-bold">{t1}</span> & <span className="font-bold">{t2}</span>
-                            <p className="text-slate-600 mt-1">{reason}</p>
+                            <span className="font-bold">{s.name1}</span> & <span className="font-bold">{s.name2}</span>
+                            <p className="text-slate-600 mt-1">{s.reason}</p>
                         </div>
                         <Button
                             size="sm"
                             className="h-6 px-2 text-[10px] bg-indigo-200 text-indigo-800 hover:bg-indigo-300 ml-2 shadow-none border border-indigo-300"
-                            onClick={() => onApply(t1, t2)}
+                            onClick={() => onApply(s.id1, s.id2)}
                         >
                             Merge
                         </Button>
@@ -514,10 +523,10 @@ const WorkspaceDashboardImpl = ({
     onOptimize: () => void;
     onAddTable: () => void;
     onExportSQL: () => void;
-    suggestions: readonly (readonly [string, string, string])[];
+    suggestions: readonly MergeSuggestionDisplay[];
     isAnalyzing?: boolean;
     analysisWarnings: readonly string[];
-    onMerge: (t1: string, t2: string) => void;
+    onMerge: (id1: string, id2: string) => void;
 }): React.ReactElement => {
     const [showSuggestions, setShowSuggestions] = useState(true);
 

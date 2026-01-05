@@ -2,6 +2,9 @@
  * Adapter.HaskellSync (The Adapter)
  * Bridges the user's mouse and the Haskell logic.
  * Combines effectful logic and next/react hooks.
+ * 
+ * DESIGN: Resolves IDs to display names for the View.
+ * View remains dumb - receives resolved data, fires callbacks with IDs.
  */
 
 "use client";
@@ -20,17 +23,15 @@ import {
 
 import { useWorkspaceService } from "./context";
 import { useOptimizerService } from "../optimizer/context";
-import { WorkspaceCanvas, type TableData } from "./view";
-import { type Workspace, type Relation } from "./model";
+import { WorkspaceCanvas, type TableData, type MergeSuggestionDisplay } from "./view";
+import { type Workspace, type Relation, type TableId } from "./model";
 
 // -- Adapter Component --
 
 export const WorkspaceAdapter = (): React.ReactElement => {
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-    const [suggestions, setSuggestions] = React.useState<
-        readonly (readonly [string, string, string])[]
-    >([]);
+    const [suggestions, setSuggestions] = React.useState<MergeSuggestionDisplay[]>([]);
     const [warnings, setWarnings] = React.useState<readonly string[]>([]);
 
     const service = useWorkspaceService();
@@ -40,13 +41,31 @@ export const WorkspaceAdapter = (): React.ReactElement => {
     useEffect(() => {
         const program = Effect.gen(function* (_) {
             const updateUI = Effect.gen(function* (_) {
-                const state = yield* Ref.get(service.state); // Was service.workspace
+                const state = yield* Ref.get(service.state);
                 const ws = state.present;
                 const flow = mapStateToFlow(ws, service, optimizerService);
+
+                // Resolve merge suggestions: IDs → display names
+                const idToName = new Map(ws.relations.map(r => [r.id, r.name]));
+                const resolvedSuggestions: MergeSuggestionDisplay[] = ws.mergeSuggestions
+                    .map(s => {
+                        const name1 = idToName.get(s.tableId1);
+                        const name2 = idToName.get(s.tableId2);
+                        if (!name1 || !name2) return null;
+                        return {
+                            id1: s.tableId1,
+                            id2: s.tableId2,
+                            name1,
+                            name2,
+                            reason: s.reason,
+                        };
+                    })
+                    .filter((s): s is NonNullable<typeof s> => s !== null);
+
                 yield* Effect.sync(() => {
                     setNodes(flow.nodes);
                     setEdges(flow.edges);
-                    setSuggestions(ws.mergeSuggestions);
+                    setSuggestions(resolvedSuggestions);
                     setWarnings(ws.analysisWarnings);
                 });
             });
@@ -79,7 +98,7 @@ export const WorkspaceAdapter = (): React.ReactElement => {
         (params: Connection) => {
             // If connecting different tables, create a cross-table FD
             if (params.source && params.target && params.source !== params.target) {
-                Effect.runPromise(service.addCrossTableFD(params.source, params.target));
+                Effect.runPromise(service.addCrossTableFD(params.source as TableId, params.target as TableId));
             }
             setEdges((eds) => addEdge(params, eds));
         },
@@ -95,7 +114,7 @@ export const WorkspaceAdapter = (): React.ReactElement => {
 
     const onNodeDragStop = useCallback(
         (_event: unknown, node: Node) => {
-            Effect.runPromise(service.updateRelationPosition(node.id, node.position.x, node.position.y));
+            Effect.runPromise(service.updateRelationPosition(node.id as TableId, node.position.x, node.position.y));
         },
         [service]
     );
@@ -126,7 +145,6 @@ export const WorkspaceAdapter = (): React.ReactElement => {
         const currentState = Effect.runSync(Ref.get(service.state));
         const ws = currentState.present;
 
-        // Import dynamically to avoid circular deps if needed
         import("./sql-generator").then(({ generateSQL }) => {
             const sql = generateSQL(ws);
 
@@ -138,6 +156,11 @@ export const WorkspaceAdapter = (): React.ReactElement => {
             a.click();
             URL.revokeObjectURL(url);
         });
+    }, [service]);
+
+    // Merge handler takes IDs from the suggestion (as strings from View)
+    const onMerge = useCallback((id1: string, id2: string) => {
+        Effect.runPromise(service.mergeRelations(id1 as TableId, id2 as TableId));
     }, [service]);
 
     return (
@@ -155,9 +178,7 @@ export const WorkspaceAdapter = (): React.ReactElement => {
                 onExportSQL={onExportSQL}
                 isAnalyzing={isAnalyzing}
                 mergeSuggestions={suggestions}
-                onMergeRelations={(t1, t2) => {
-                    Effect.runPromise(service.mergeRelations(t1, t2));
-                }}
+                onMergeRelations={onMerge}
                 analysisWarnings={warnings}
             />
         </div>
@@ -167,13 +188,13 @@ export const WorkspaceAdapter = (): React.ReactElement => {
 // -- Helper: Map Model to React Flow --
 
 interface ServiceRef {
-    renameRelation: (id: string, newName: string) => Effect.Effect<void>;
-    addAttribute: (id: string, name: string) => Effect.Effect<void>;
-    deleteAttribute: (id: string, name: string) => Effect.Effect<void>;
-    addFD: (id: string, lhs: string[], rhs: string[]) => Effect.Effect<void>;
-    deleteFD: (id: string, index: number) => Effect.Effect<void>;
+    renameRelation: (id: TableId, newName: string) => Effect.Effect<void>;
+    addAttribute: (id: TableId, name: string) => Effect.Effect<void>;
+    deleteAttribute: (id: TableId, name: string) => Effect.Effect<void>;
+    addFD: (id: TableId, lhs: string[], rhs: string[]) => Effect.Effect<void>;
+    deleteFD: (id: TableId, index: number) => Effect.Effect<void>;
     deleteCrossTableFD: (index: number) => Effect.Effect<void>;
-    mergeRelations: (t1: string, t2: string) => Effect.Effect<void>;
+    mergeRelations: (id1: TableId, id2: TableId) => Effect.Effect<void>;
 }
 
 interface OptimizerRef {
@@ -188,10 +209,12 @@ const mapStateToFlow = (
     const nodes: Node[] = [];
     const edges: Edge[] = [];
 
-    const healthMap = new Map(workspace.health.map((h) => [h.tableName, h]));
+    // Build lookup maps
+    const healthMap = new Map(workspace.health.map((h) => [h.tableId, h]));
+    const idToName = new Map(workspace.relations.map(r => [r.id, r.name]));
 
     workspace.relations.forEach((rel: Relation) => {
-        const tableHealth = healthMap.get(rel.name);
+        const tableHealth = healthMap.get(rel.id);
 
         const tableData: TableData = {
             id: rel.id,
@@ -229,10 +252,10 @@ const mapStateToFlow = (
         });
     });
 
-    // Foreign Key edges (solid blue lines with FK label)
+    // Foreign Key edges
     workspace.foreignKeys.forEach((fk, i) => {
-        const fromRel = workspace.relations.find((r) => r.name === fk.fromTable);
-        const toRel = workspace.relations.find((r) => r.name === fk.toTable);
+        const fromRel = workspace.relations.find((r) => r.id === fk.fromTableId);
+        const toRel = workspace.relations.find((r) => r.id === fk.toTableId);
 
         if (fromRel && toRel) {
             edges.push({
@@ -250,10 +273,10 @@ const mapStateToFlow = (
         }
     });
 
-    // Cross-table FD edges (dashed amber lines)
+    // Cross-table FD edges
     workspace.crossTableFDs.forEach((ctfd, i) => {
-        const fromRel = workspace.relations.find((r) => r.name === ctfd.fromTable);
-        const toRel = workspace.relations.find((r) => r.name === ctfd.toTable);
+        const fromRel = workspace.relations.find((r) => r.id === ctfd.fromTableId);
+        const toRel = workspace.relations.find((r) => r.id === ctfd.toTableId);
 
         if (fromRel && toRel) {
             edges.push({

@@ -3,6 +3,10 @@
  * Stores the state of every node, edge, and table boundary.
  * Effect Schema: Defines the Workspace structure.
  * Pure data definitions only.
+ * 
+ * DESIGN: TableId is a stable UUID generated on the frontend.
+ * All references use TableId, not table name.
+ * Backend uses names (stateless), frontend maps names↔IDs in effects.ts.
  */
 
 import * as Schema from "@effect/schema/Schema";
@@ -19,10 +23,9 @@ export interface History<T> {
     readonly future: ReadonlyArray<T>;
 }
 
+// TableId is a stable UUID, never changes after creation
 export const TableId = Schema.String.pipe(Schema.brand("TableId"));
 export type TableId = Schema.Schema.Type<typeof TableId>;
-
-// -- Functional Dependencies --
 
 // -- Functional Dependencies --
 
@@ -32,9 +35,10 @@ export const FunctionalDependency = Schema.Struct({
 });
 export type FunctionalDependency = Schema.Schema.Type<typeof FunctionalDependency>;
 
+// CrossTableFD uses TableIds
 export const CrossTableFD = Schema.Struct({
-    fromTable: Schema.String,
-    toTable: Schema.String,
+    fromTableId: TableId,
+    toTableId: TableId,
     fd: FunctionalDependency,
     suggestion: Schema.String,
 });
@@ -45,8 +49,9 @@ export type CrossTableFD = Schema.Schema.Type<typeof CrossTableFD>;
 export const HealthSeverity = Schema.Literal("ok", "warning", "error");
 export type HealthSeverity = Schema.Schema.Type<typeof HealthSeverity>;
 
+// TableHealth uses TableId
 export const TableHealth = Schema.Struct({
-    tableName: Schema.String,
+    tableId: TableId,
     severity: HealthSeverity,
     message: Schema.String,
     suggestion: Schema.String,
@@ -56,11 +61,11 @@ export type TableHealth = Schema.Schema.Type<typeof TableHealth>;
 // -- Relations (Tables) --
 
 export const Relation = Schema.Struct({
-    id: TableId,
-    name: Schema.String,
+    id: TableId,           // Stable UUID
+    name: Schema.String,   // Display name, freely editable
     attributes: Schema.Array(Attribute),
     fds: Schema.Array(FunctionalDependency),
-    position: Schema.Struct({ x: Schema.Number, y: Schema.Number }), // Visual position
+    position: Schema.Struct({ x: Schema.Number, y: Schema.Number }),
 });
 export type Relation = Schema.Schema.Type<typeof Relation>;
 
@@ -82,22 +87,31 @@ export const TreeNode: Schema.Schema<TreeNode, any> = Schema.suspend(() =>
 
 // -- Foreign Keys --
 
+// ForeignKey uses TableIds
 export const ForeignKey = Schema.Struct({
-    fromTable: Schema.String,
+    fromTableId: TableId,
     fromAttribute: Schema.String,
-    toTable: Schema.String,
+    toTableId: TableId,
     toAttribute: Schema.String,
 });
 export type ForeignKey = Schema.Schema.Type<typeof ForeignKey>;
 
 // -- Workspace --
 
+// MergeSuggestion uses TableIds
+export const MergeSuggestion = Schema.Struct({
+    tableId1: TableId,
+    tableId2: TableId,
+    reason: Schema.String,
+});
+export type MergeSuggestion = Schema.Schema.Type<typeof MergeSuggestion>;
+
 export const Workspace = Schema.Struct({
     relations: Schema.Array(Relation),
     crossTableFDs: Schema.Array(CrossTableFD),
-    foreignKeys: Schema.Array(ForeignKey), // FK relationships after normalization
+    foreignKeys: Schema.Array(ForeignKey),
     health: Schema.Array(TableHealth),
-    mergeSuggestions: Schema.Array(Schema.Tuple(Schema.String, Schema.String, Schema.String)),
+    mergeSuggestions: Schema.Array(MergeSuggestion),
     analysisWarnings: Schema.Array(Schema.String),
 });
 export type Workspace = Schema.Schema.Type<typeof Workspace>;
@@ -108,6 +122,7 @@ export const OptimizationStrategy = Schema.Literal("bcnf", "3nf", "performance")
 export type OptimizationStrategy = Schema.Schema.Type<typeof OptimizationStrategy>;
 
 // -- API Types (matching Backend) --
+// Backend uses names, not IDs. Frontend maps these in effects.ts.
 
 export const BackendRelation = Schema.Struct({
     rjName: Schema.String,

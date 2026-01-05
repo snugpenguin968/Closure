@@ -1,10 +1,17 @@
 /**
  * Actions (MVA Update Logic)
  * Pure functions that transition State -> State.
+ * 
+ * DESIGN: All references use TableId (UUID). Actions are simple and focused.
+ * No cascade updates needed because IDs are stable.
  */
 
 import { type WorkspaceState, type History } from "./state";
-import { type Workspace, type Relation, type Attribute, type TableId } from "./model";
+import { type Workspace, type Relation, type Attribute, type TableId, type MergeSuggestion } from "./model";
+
+// -- UUID Generation --
+
+const generateId = (): TableId => crypto.randomUUID() as TableId;
 
 // -- History Actions --
 
@@ -14,7 +21,6 @@ const MAX_HISTORY = 50;
  * Pushes a new state into history, clearing future.
  */
 export const push = <T>(history: History<T>, newPresent: T): History<T> => {
-    // If state hasn't changed, return history as-is (optional optimization)
     if (history.present === newPresent) return history;
 
     return {
@@ -46,7 +52,6 @@ export const redo = <T>(history: History<T>): History<T> => {
 
 // -- Domain Actions (Wrapped in History Push) --
 
-// Helper to wrap a pure workspace transform into a history push
 const makeAction = (transform: (ws: Workspace) => Workspace) => (state: WorkspaceState): WorkspaceState => {
     const newWorkspace = transform(state.present);
     return push(state, newWorkspace);
@@ -54,30 +59,30 @@ const makeAction = (transform: (ws: Workspace) => Workspace) => (state: Workspac
 
 // Helper to recalculate cross-table FD suggestions based on shared attributes
 const recalculateCrossTableSuggestions = (ws: Workspace): Workspace => {
+    const relMap = new Map(ws.relations.map(r => [r.id, r]));
+
     const updatedFDs = ws.crossTableFDs.map(ctfd => {
-        const fromRel = ws.relations.find(r => r.name === ctfd.fromTable || r.id === ctfd.fromTable);
-        const toRel = ws.relations.find(r => r.name === ctfd.toTable || r.id === ctfd.toTable);
+        const fromRel = relMap.get(ctfd.fromTableId);
+        const toRel = relMap.get(ctfd.toTableId);
 
         if (!fromRel || !toRel) {
-            return ctfd; // Keep as-is if relations not found
+            return ctfd;
         }
 
-        // Find shared attributes
         const fromAttrs = new Set(fromRel.attributes);
         const sharedAttrs = toRel.attributes.filter(a => fromAttrs.has(a));
 
-        let suggestion: string;
-        if (sharedAttrs.length === 0) {
-            suggestion = "No shared keys? Potential join dependency.";
-        } else {
-            suggestion = `Shared: ${sharedAttrs.join(", ")} ✓ Possible FK relationship.`;
-        }
+        const suggestion = sharedAttrs.length === 0
+            ? "No shared keys? Potential join dependency."
+            : `Shared: ${sharedAttrs.join(", ")} ✓ Possible FK relationship.`;
 
         return { ...ctfd, suggestion };
     });
 
     return { ...ws, crossTableFDs: updatedFDs };
 };
+
+// -- Relation CRUD --
 
 export const addRelation = (
     name: string,
@@ -90,7 +95,7 @@ export const addRelation = (
     relations: [
         ...ws.relations,
         {
-            id: name as TableId, // Using name as ID for now, consistent with existing logic
+            id: generateId(),
             name,
             attributes: attributes.map((a) => a as Attribute),
             fds: fds.map((fd) => ({
@@ -102,54 +107,23 @@ export const addRelation = (
     ],
 }));
 
-export const deleteRelation = (id: string) => makeAction((ws) => ({
+export const deleteRelation = (id: TableId) => makeAction((ws) => ({
     ...ws,
     relations: ws.relations.filter((r) => r.id !== id),
-    // Cleanup related data
-    health: ws.health.filter((h) => h.tableName !== id),
-    mergeSuggestions: ws.mergeSuggestions.filter(([t1, t2]) => t1 !== id && t2 !== id),
+    // Clean up all references by ID
+    health: ws.health.filter((h) => h.tableId !== id),
+    mergeSuggestions: ws.mergeSuggestions.filter((s) => s.tableId1 !== id && s.tableId2 !== id),
+    crossTableFDs: ws.crossTableFDs.filter((c) => c.fromTableId !== id && c.toTableId !== id),
+    foreignKeys: ws.foreignKeys.filter((fk) => fk.fromTableId !== id && fk.toTableId !== id),
 }));
 
-export const renameRelation = (id: string, newName: string) => makeAction((ws) => {
-    // Find the old name for cascading updates
-    const oldRel = ws.relations.find((r) => r.id === id);
-    if (!oldRel) return ws;
-    const oldName = oldRel.name;
+// SIMPLE! Just update the name. No cascade needed.
+export const renameRelation = (id: TableId, newName: string) => makeAction((ws) => ({
+    ...ws,
+    relations: ws.relations.map((r) => r.id === id ? { ...r, name: newName } : r),
+}));
 
-    // Helper to replace old name with new name
-    const replaceName = (name: string) => (name === oldName ? newName : name);
-
-    return {
-        ...ws,
-        // Update the relation itself
-        relations: ws.relations.map((r) =>
-            r.id === id ? { ...r, name: newName, id: newName as TableId } : r
-        ),
-        // Update crossTableFDs references
-        crossTableFDs: ws.crossTableFDs.map((ctfd) => ({
-            ...ctfd,
-            fromTable: replaceName(ctfd.fromTable),
-            toTable: replaceName(ctfd.toTable),
-        })),
-        // Update health references
-        health: ws.health.map((h) => ({
-            ...h,
-            tableName: replaceName(h.tableName),
-        })),
-        // Update merge suggestions
-        mergeSuggestions: ws.mergeSuggestions.map(([t1, t2, reason]) =>
-            [replaceName(t1), replaceName(t2), reason] as const
-        ),
-        // Update foreign keys
-        foreignKeys: ws.foreignKeys.map((fk) => ({
-            ...fk,
-            fromTable: replaceName(fk.fromTable),
-            toTable: replaceName(fk.toTable),
-        })),
-    };
-});
-
-export const addAttribute = (relationId: string, name: string) => makeAction((ws) => {
+export const addAttribute = (relationId: TableId, name: string) => makeAction((ws) => {
     const updated = {
         ...ws,
         relations: ws.relations.map((r) =>
@@ -161,7 +135,7 @@ export const addAttribute = (relationId: string, name: string) => makeAction((ws
     return recalculateCrossTableSuggestions(updated);
 });
 
-export const deleteAttribute = (relationId: string, name: string) => makeAction((ws) => {
+export const deleteAttribute = (relationId: TableId, name: string) => makeAction((ws) => {
     const updated = {
         ...ws,
         relations: ws.relations.map((r) =>
@@ -169,7 +143,6 @@ export const deleteAttribute = (relationId: string, name: string) => makeAction(
                 ? {
                     ...r,
                     attributes: r.attributes.filter((a) => a !== name),
-                    // Cleanup FDs containing this attribute
                     fds: r.fds.filter(
                         (fd) => !fd.lhs.includes(name as Attribute) && !fd.rhs.includes(name as Attribute)
                     ),
@@ -180,7 +153,7 @@ export const deleteAttribute = (relationId: string, name: string) => makeAction(
     return recalculateCrossTableSuggestions(updated);
 });
 
-export const addFD = (relationId: string, lhs: string[], rhs: string[]) => makeAction((ws) => ({
+export const addFD = (relationId: TableId, lhs: string[], rhs: string[]) => makeAction((ws) => ({
     ...ws,
     relations: ws.relations.map((r) =>
         r.id === relationId
@@ -198,7 +171,7 @@ export const addFD = (relationId: string, lhs: string[], rhs: string[]) => makeA
     ),
 }));
 
-export const deleteFD = (relationId: string, index: number) => makeAction((ws) => ({
+export const deleteFD = (relationId: TableId, index: number) => makeAction((ws) => ({
     ...ws,
     relations: ws.relations.map((r) =>
         r.id === relationId
@@ -207,54 +180,72 @@ export const deleteFD = (relationId: string, index: number) => makeAction((ws) =
     ),
 }));
 
-export const updateRelationPosition = (id: string, x: number, y: number) => makeAction((ws) => ({
+export const updateRelationPosition = (id: TableId, x: number, y: number) => makeAction((ws) => ({
     ...ws,
     relations: ws.relations.map((r) => (r.id === id ? { ...r, position: { x, y } } : r)),
 }));
 
+// -- Analysis Results --
+
 export const setAnalysisResults = (
-    _newRelations: Relation[], // Ignored - we keep existing relations
     health: Workspace["health"],
-    mergeSuggestions: Workspace["mergeSuggestions"],
+    mergeSuggestions: MergeSuggestion[],
     analysisWarnings: Workspace["analysisWarnings"]
 ) => makeAction((ws) => ({
-    // Keep existing relations, only update health/suggestions
     ...ws,
     health,
     mergeSuggestions,
     analysisWarnings,
 }));
 
-export const addCrossTableFD = (fromTableId: string, toTableId: string) => makeAction((ws) => ({
-    ...ws,
-    crossTableFDs: [
-        ...ws.crossTableFDs,
-        {
-            fromTable: fromTableId,
-            toTable: toTableId,
-            fd: { lhs: [], rhs: [] }, // Placeholder
-            suggestion: "No shared keys? Potential join dependency.",
-        },
-    ],
-}));
+// -- Cross-Table FDs --
+
+export const addCrossTableFD = (fromTableId: TableId, toTableId: TableId) => makeAction((ws) => {
+    const fromRel = ws.relations.find(r => r.id === fromTableId);
+    const toRel = ws.relations.find(r => r.id === toTableId);
+
+    // Calculate initial suggestion
+    let suggestion = "No shared keys? Potential join dependency.";
+    if (fromRel && toRel) {
+        const fromAttrs = new Set(fromRel.attributes);
+        const sharedAttrs = toRel.attributes.filter(a => fromAttrs.has(a));
+        if (sharedAttrs.length > 0) {
+            suggestion = `Shared: ${sharedAttrs.join(", ")} ✓ Possible FK relationship.`;
+        }
+    }
+
+    return {
+        ...ws,
+        crossTableFDs: [
+            ...ws.crossTableFDs,
+            {
+                fromTableId,
+                toTableId,
+                fd: { lhs: [], rhs: [] },
+                suggestion,
+            },
+        ],
+    };
+});
 
 export const deleteCrossTableFD = (index: number) => makeAction((ws) => ({
     ...ws,
     crossTableFDs: ws.crossTableFDs.filter((_, i) => i !== index),
 }));
 
-export const mergeRelations = (name1: string, name2: string) => makeAction((ws) => {
-    const r1 = ws.relations.find((r) => r.name === name1);
-    const r2 = ws.relations.find((r) => r.name === name2);
+// -- Merge Relations --
+
+export const mergeRelations = (id1: TableId, id2: TableId) => makeAction((ws) => {
+    const r1 = ws.relations.find((r) => r.id === id1);
+    const r2 = ws.relations.find((r) => r.id === id2);
     if (!r1 || !r2) return ws;
 
-    const mergedName = name1;
     const mergedAttrs = Array.from(new Set([...r1.attributes, ...r2.attributes]));
     const mergedFDs = [...r1.fds, ...r2.fds];
 
     const mergedRel: Relation = {
-        id: r1.id,
-        name: mergedName,
+        id: r1.id,  // Keep first table's ID
+        name: r1.name,  // Keep first table's name
         attributes: mergedAttrs,
         fds: mergedFDs,
         position: {
@@ -263,26 +254,23 @@ export const mergeRelations = (name1: string, name2: string) => makeAction((ws) 
         },
     };
 
-    // Get names of tables that will exist after merge
-    const remainingTableNames = new Set(
-        ws.relations
-            .filter((r) => r.name !== name1 && r.name !== name2)
-            .map((r) => r.name)
-    );
-    remainingTableNames.add(mergedName); // Add the merged table
-
     return {
         ...ws,
-        relations: [...ws.relations.filter((r) => r.name !== name1 && r.name !== name2), mergedRel],
-        // Filter out any suggestion that references a table that no longer exists
-        mergeSuggestions: ws.mergeSuggestions.filter(([t1, t2]) =>
-            remainingTableNames.has(t1) && remainingTableNames.has(t2)
+        relations: [...ws.relations.filter((r) => r.id !== id1 && r.id !== id2), mergedRel],
+        // Remove suggestions involving either table
+        mergeSuggestions: ws.mergeSuggestions.filter((s) =>
+            s.tableId1 !== id1 && s.tableId1 !== id2 && s.tableId2 !== id1 && s.tableId2 !== id2
         ),
-        health: ws.health.filter((h) => h.tableName !== name1 && h.tableName !== name2),
-        // Also clean up crossTableFDs that reference the deleted table
-        crossTableFDs: ws.crossTableFDs.filter(
-            (ctfd) => ctfd.fromTable !== name2 && ctfd.toTable !== name2
-        ),
+        // Remove health for merged-away table
+        health: ws.health.filter((h) => h.tableId !== id2),
+        // Update crossTableFDs: remove ones to deleted table, update refs to merged table
+        crossTableFDs: ws.crossTableFDs
+            .filter((c) => c.fromTableId !== id2 && c.toTableId !== id2)
+            .map((c) => ({
+                ...c,
+                // Keep using id1 for any that referenced id1
+            })),
+        // Update foreignKeys similarly
+        foreignKeys: ws.foreignKeys.filter((fk) => fk.fromTableId !== id2 && fk.toTableId !== id2),
     };
 });
-
