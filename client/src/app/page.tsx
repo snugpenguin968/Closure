@@ -15,7 +15,6 @@ export default function Home() {
 
           {/* Overlay Features */}
           <OptimizerAdapter />
-
         </OptimizerProvider>
       </WorkspaceProvider>
     </main>

@@ -6,50 +6,41 @@
 
 "use client";
 
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback } from "react";
 import { Effect, Ref, Stream } from "effect";
 import {
-    Node,
-    Edge,
+    type Node,
+    type Edge,
     useNodesState,
     useEdgesState,
-    Connection,
+    type Connection,
     addEdge,
-    MarkerType
-} from 'reactflow';
+    MarkerType,
+} from "reactflow";
 
 import { useWorkspaceService } from "./context";
 import { useOptimizerService } from "../optimizer/context";
-import { WorkspaceCanvas } from "./view";
-import { Workspace } from "./model";
+import { WorkspaceCanvas, type TableData } from "./view";
+import { type Workspace, type Relation } from "./model";
 
 // -- Adapter Component --
 
-export const WorkspaceAdapter = () => {
-    // Local React Flow state (for optimistic updates / dragging)
+export const WorkspaceAdapter = (): React.ReactElement => {
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-    const [suggestions, setSuggestions] = React.useState<readonly (readonly [string, string, string])[]>([]);
+    const [suggestions, setSuggestions] = React.useState<
+        readonly (readonly [string, string, string])[]
+    >([]);
 
-    // Get services
     const service = useWorkspaceService();
-    // Optional optimizer service
     const optimizerService = useOptimizerService();
 
     // Hydrate state from Service
     useEffect(() => {
-        // Start the subscription
         const program = Effect.gen(function* (_) {
-
             const updateUI = Effect.gen(function* (_) {
                 const ws = yield* Ref.get(service.workspace);
-
-                // Handler closes over optimizerService to bridge Effect/React worlds
-                const handler = (id: string) => () => {
-                    Effect.runPromise(optimizerService.open(id));
-                };
-
-                const flow = mapStateToFlow(ws, handler);
+                const flow = mapStateToFlow(ws, service, optimizerService);
                 yield* Effect.sync(() => {
                     setNodes(flow.nodes);
                     setEdges(flow.edges);
@@ -57,40 +48,64 @@ export const WorkspaceAdapter = () => {
                 });
             });
 
-            // Run initial update
             yield* updateUI;
 
-            // Subscribe to future updates
-            return yield* Stream.fromPubSub(service.events).pipe(
-                Stream.runForEach(() => updateUI)
-            );
+            return yield* Stream.fromPubSub(service.events).pipe(Stream.runForEach(() => updateUI));
         });
 
-        const runPromise = Effect.runPromise(program);
+        Effect.runPromise(program);
 
         return () => {
-            // cleanup if needed (cancel the fiber if we kept reference)
-            // For now, simple runPromise is okay, but strictly we might want to cancel.
-            // But since runPromise returns a Promise<void> and not a canceler (unless using runFork), 
-            // we'll rely on GC or next render to ignore updates if mounted catch was improved.
+            // Cleanup handled by GC
         };
     }, [service, optimizerService, setNodes, setEdges]);
 
-    const onConnect = useCallback((params: Connection) => {
-        setEdges((eds) => addEdge(params, eds));
-    }, [setEdges]);
+    const onConnect = useCallback(
+        (params: Connection) => {
+            // If connecting different tables, create a cross-table FD
+            if (params.source && params.target && params.source !== params.target) {
+                Effect.runPromise(service.addCrossTableFD(params.source, params.target));
+            }
+            setEdges((eds) => addEdge(params, eds));
+        },
+        [setEdges, service]
+    );
 
-    const onGlobalOptimize = () => {
-        Effect.runPromise(service.optimizeWorkspace('3nf'));
-    };
-
-    // Handle Drag Stop -> Persist to Store
-    const onNodeDragStop = useCallback((event: any, node: Node) => {
-        if (!node.parentNode) {
-            // Run effect using the service instance directly
-            Effect.runPromise(service.updateRelationPosition(node.id, node.position.x, node.position.y));
-        }
+    const onAddTable = useCallback(() => {
+        const name = `Table${Math.floor(Math.random() * 1000)}`;
+        Effect.runPromise(
+            service.addRelation(name, [], [], 200 + Math.random() * 200, 150 + Math.random() * 100)
+        );
     }, [service]);
+
+    const onNodeDragStop = useCallback(
+        (_event: unknown, node: Node) => {
+            Effect.runPromise(service.updateRelationPosition(node.id, node.position.x, node.position.y));
+        },
+        [service]
+    );
+
+    const [isAnalyzing, setIsAnalyzing] = React.useState(false);
+
+    const onGlobalOptimizeWithLoading = useCallback(() => {
+        setIsAnalyzing(true);
+        Effect.runPromise(service.optimizeWorkspace("3nf")).finally(() => {
+            setIsAnalyzing(false);
+        });
+    }, [service]);
+
+    const onEdgeClick = useCallback(
+        (_event: React.MouseEvent, edge: Edge) => {
+            // Delete cross-table FDs when clicking their edges
+            if (edge.id.startsWith("cross-")) {
+                const index = parseInt(edge.id.replace("cross-", ""), 10);
+                if (!isNaN(index)) {
+                    Effect.runPromise(service.deleteCrossTableFD(index));
+                }
+            }
+        },
+        [service]
+    );
 
     return (
         <div className="w-full h-screen">
@@ -101,7 +116,10 @@ export const WorkspaceAdapter = () => {
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
                 onNodeDragStop={onNodeDragStop}
-                onGlobalOptimize={onGlobalOptimize}
+                onEdgeClick={onEdgeClick}
+                onGlobalOptimize={onGlobalOptimizeWithLoading}
+                onAddTable={onAddTable}
+                isAnalyzing={isAnalyzing}
                 mergeSuggestions={suggestions}
             />
         </div>
@@ -110,80 +128,104 @@ export const WorkspaceAdapter = () => {
 
 // -- Helper: Map Model to React Flow --
 
-const mapStateToFlow = (workspace: Workspace, onNormalize: (id: string) => () => void): { nodes: Node[], edges: Edge[] } => {
+interface ServiceRef {
+    renameRelation: (id: string, newName: string) => Effect.Effect<void>;
+    addAttribute: (id: string, name: string) => Effect.Effect<void>;
+    deleteAttribute: (id: string, name: string) => Effect.Effect<void>;
+    addFD: (id: string, lhs: string[], rhs: string[]) => Effect.Effect<void>;
+    deleteFD: (id: string, index: number) => Effect.Effect<void>;
+}
+
+interface OptimizerRef {
+    open: (id: string) => Effect.Effect<void>;
+}
+
+const mapStateToFlow = (
+    workspace: Workspace,
+    service: ServiceRef,
+    optimizerService: OptimizerRef
+): { nodes: Node[]; edges: Edge[] } => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
 
-    // Index health by table name for O(1) lookup
-    const healthMap = new Map(workspace.health.map(h => [h.tableName, h]));
+    const healthMap = new Map(workspace.health.map((h) => [h.tableName, h]));
 
-    workspace.relations.forEach(rel => {
-        // 1. Table Group Node
+    workspace.relations.forEach((rel: Relation) => {
         const tableHealth = healthMap.get(rel.name);
+
+        const tableData: TableData = {
+            id: rel.id,
+            name: rel.name,
+            attributes: rel.attributes,
+            fds: rel.fds,
+            health: tableHealth
+                ? { severity: tableHealth.severity, message: tableHealth.message }
+                : undefined,
+            onRename: (newName: string) => {
+                Effect.runPromise(service.renameRelation(rel.id, newName));
+            },
+            onAddAttribute: (name: string) => {
+                Effect.runPromise(service.addAttribute(rel.id, name));
+            },
+            onDeleteAttribute: (name: string) => {
+                Effect.runPromise(service.deleteAttribute(rel.id, name));
+            },
+            onAddFD: (lhs: string[], rhs: string[]) => {
+                Effect.runPromise(service.addFD(rel.id, lhs, rhs));
+            },
+            onDeleteFD: (index: number) => {
+                Effect.runPromise(service.deleteFD(rel.id, index));
+            },
+            onOptimize: () => {
+                Effect.runPromise(optimizerService.open(rel.id));
+            },
+        };
+
         nodes.push({
             id: rel.id,
-            type: 'table',
+            type: "table",
             position: rel.position,
-            data: {
-                label: rel.name,
-                onNormalize: onNormalize(rel.id),
-                health: tableHealth ? { severity: tableHealth.severity, message: tableHealth.message } : undefined
-            },
-            style: { width: 250, height: 60 + rel.attributes.length * 40 }, // dynamic height
-        });
-
-        // 2. Attribute Nodes
-        rel.attributes.forEach((attr, idx) => {
-            const attrId = `${rel.id}-${attr}`;
-            nodes.push({
-                id: attrId,
-                type: 'attribute',
-                position: { x: 15, y: 60 + idx * 40 }, // Relative to parent
-                parentNode: rel.id,
-                extent: 'parent', // Constrain to parent
-                data: { label: attr, isKey: false },
-            });
-        });
-
-        // 3. Intra-table FDs (Edges)
-        rel.fds.forEach((fd, i) => {
-            // Render intra-table dependencies
-            if (fd.lhs.length > 0 && fd.rhs.length > 0) {
-                const sourceId = `${rel.id}-${fd.lhs[0]}`;
-                const targetId = `${rel.id}-${fd.rhs[0]}`;
-                edges.push({
-                    id: `${rel.id}-fd-${i}`,
-                    source: sourceId,
-                    target: targetId,
-                    animated: false,
-                    style: { stroke: '#334155', strokeWidth: 2 },
-                    markerEnd: { type: MarkerType.ArrowClosed, color: '#334155' },
-                });
-            }
+            data: tableData,
         });
     });
 
-    // 4. Cross-Table FDs (Dashed Edges)
+    // Foreign Key edges (solid blue lines with FK label)
+    workspace.foreignKeys.forEach((fk, i) => {
+        const fromRel = workspace.relations.find((r) => r.name === fk.fromTable);
+        const toRel = workspace.relations.find((r) => r.name === fk.toTable);
+
+        if (fromRel && toRel) {
+            edges.push({
+                id: `fk-${i}`,
+                source: fromRel.id,
+                target: toRel.id,
+                type: "smoothstep",
+                animated: false,
+                style: { stroke: "#3b82f6", strokeWidth: 2 },
+                markerEnd: { type: MarkerType.ArrowClosed, color: "#3b82f6" },
+                label: `FK: ${fk.fromAttribute}`,
+                labelStyle: { fontSize: 9, fill: "#1d4ed8", fontWeight: 600 },
+                labelBgStyle: { fill: "#dbeafe", fillOpacity: 0.95 },
+            });
+        }
+    });
+
+    // Cross-table FD edges (dashed amber lines)
     workspace.crossTableFDs.forEach((ctfd, i) => {
-        // We need to find the node IDs for the attributes involved.
-        // Since we don't have a direct map of Attribute -> NodeID, we might need to construct it or search.
-        // But we know the naming convention: `${tableId}-${attribute}`.
-        // Use table IDs from relation lookup.
-        const fromRel = workspace.relations.find(r => r.name === ctfd.fromTable);
-        const toRel = workspace.relations.find(r => r.name === ctfd.toTable);
+        const fromRel = workspace.relations.find((r) => r.name === ctfd.fromTable);
+        const toRel = workspace.relations.find((r) => r.name === ctfd.toTable);
 
-        if (fromRel && toRel && ctfd.fd.lhs.length > 0 && ctfd.fd.rhs.length > 0) {
-            const sourceId = `${fromRel.id}-${ctfd.fd.lhs[0]}`; // Simplified to first attr for now
-            const targetId = `${toRel.id}-${ctfd.fd.rhs[0]}`;
-
+        if (fromRel && toRel) {
             edges.push({
                 id: `cross-${i}`,
-                source: sourceId,
-                target: targetId,
+                source: fromRel.id,
+                target: toRel.id,
                 animated: true,
-                style: { stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '5,5' }, // Amber dashed line
-                markerEnd: { type: MarkerType.ArrowClosed, color: '#f59e0b' },
-                data: { tooltip: ctfd.suggestion } // Could add custom tooltip later
+                style: { stroke: "#f59e0b", strokeWidth: 2, strokeDasharray: "5,5" },
+                markerEnd: { type: MarkerType.ArrowClosed, color: "#f59e0b" },
+                label: ctfd.suggestion,
+                labelStyle: { fontSize: 9, fill: "#92400e" },
+                labelBgStyle: { fill: "#fef3c7", fillOpacity: 0.9 },
             });
         }
     });

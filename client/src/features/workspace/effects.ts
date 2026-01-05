@@ -3,46 +3,63 @@
  * Effectful logic, PubSub, and API interactions.
  */
 
-import { Effect, Context, Layer, Ref, PubSub, Stream, Console } from "effect";
+import { Effect, Context, Layer, Ref, PubSub, Console } from "effect";
 import * as Schema from "@effect/schema/Schema";
 import {
-    Workspace,
-    Relation,
-    OptimizationStrategy,
-    BackendRelation,
-    BackendDecompositionResult,
-    BackendWorkspaceResponse,
-    FunctionalDependency,
-    Attribute,
-    TableId
+  type Workspace,
+  type Relation,
+  type OptimizationStrategy,
+  type BackendRelation,
+  BackendDecompositionResult,
+  BackendWorkspaceResponse,
+  Attribute,
+  type TableId,
 } from "./model";
 
 // -- Events --
 
 export type WorkspaceEvent =
-    | { _tag: "DECOMPOSITION_RESULT_RECEIVED"; result: typeof BackendDecompositionResult.Type }
-    | { _tag: "RELATION_ADDED"; relation: Relation }
-    | { _tag: "RELATION_UPDATED"; relation: Relation }
-    | { _tag: "NORMALIZATION_COMPLETED" } // Added simple tag
-    | { _tag: "WORKSPACE_OPTIMIZED" };
+  | { _tag: "DECOMPOSITION_RESULT_RECEIVED"; result: typeof BackendDecompositionResult.Type }
+  | { _tag: "RELATION_ADDED"; relation: Relation }
+  | { _tag: "RELATION_UPDATED"; relation: Relation }
+  | { _tag: "RELATION_DELETED"; id: string }
+  | { _tag: "NORMALIZATION_COMPLETED" }
+  | { _tag: "WORKSPACE_OPTIMIZED" };
 
 // -- Errors --
 
 export class ApiError extends Schema.TaggedError<ApiError>()("ApiError", {
-    message: Schema.String,
+  message: Schema.String,
 }) { }
 
 // -- Service Definition --
 
 export interface WorkspaceService {
-    readonly workspace: Ref.Ref<Workspace>;
-    readonly events: PubSub.PubSub<WorkspaceEvent>;
+  readonly workspace: Ref.Ref<Workspace>;
+  readonly events: PubSub.PubSub<WorkspaceEvent>;
 
-    // Actions
-    readonly addRelation: (name: string, attributes: string[], fds: { lhs: string[], rhs: string[] }[], x: number, y: number) => Effect.Effect<void>;
-    readonly normalizeRelation: (relationId: string, strategy: OptimizationStrategy) => Effect.Effect<typeof BackendDecompositionResult.Type | undefined, ApiError>;
-    readonly updateRelationPosition: (id: string, x: number, y: number) => Effect.Effect<void>;
-    readonly optimizeWorkspace: (strategy: OptimizationStrategy) => Effect.Effect<void, ApiError>;
+  // Actions
+  readonly addRelation: (
+    name: string,
+    attributes: string[],
+    fds: { lhs: string[]; rhs: string[] }[],
+    x: number,
+    y: number
+  ) => Effect.Effect<void>;
+  readonly renameRelation: (id: string, newName: string) => Effect.Effect<void>;
+  readonly deleteRelation: (id: string) => Effect.Effect<void>;
+  readonly addAttribute: (relationId: string, name: string) => Effect.Effect<void>;
+  readonly deleteAttribute: (relationId: string, name: string) => Effect.Effect<void>;
+  readonly addFD: (relationId: string, lhs: string[], rhs: string[]) => Effect.Effect<void>;
+  readonly deleteFD: (relationId: string, index: number) => Effect.Effect<void>;
+  readonly addCrossTableFD: (fromTableId: string, toTableId: string) => Effect.Effect<void>;
+  readonly deleteCrossTableFD: (index: number) => Effect.Effect<void>;
+  readonly normalizeRelation: (
+    relationId: string,
+    strategy: OptimizationStrategy
+  ) => Effect.Effect<typeof BackendDecompositionResult.Type | undefined, ApiError>;
+  readonly updateRelationPosition: (id: string, x: number, y: number) => Effect.Effect<void>;
+  readonly optimizeWorkspace: (strategy: OptimizationStrategy) => Effect.Effect<void, ApiError>;
 }
 
 export const WorkspaceService = Context.GenericTag<WorkspaceService>("@app/WorkspaceService");
@@ -50,167 +67,279 @@ export const WorkspaceService = Context.GenericTag<WorkspaceService>("@app/Works
 // -- Implementation --
 
 const make = Effect.gen(function* (_) {
-    const state = yield* Ref.make<Workspace>({
-        relations: [],
-        crossTableFDs: [],
-        health: [],
-        mergeSuggestions: []
+  const state = yield* Ref.make<Workspace>({
+    relations: [],
+    crossTableFDs: [],
+    foreignKeys: [],
+    health: [],
+    mergeSuggestions: [],
+  });
+  const events = yield* PubSub.unbounded<WorkspaceEvent>();
+
+  const asAttribute = (s: string): Attribute => s as Attribute;
+
+  const toRelation = (br: typeof BackendRelation.Type): Relation => ({
+    id: br.name as TableId,
+    name: br.name,
+    attributes: br.attributes.map((s) => asAttribute(s)),
+    fds: br.fds.map((fd) => ({
+      lhs: fd.lhs.map((s) => asAttribute(s)),
+      rhs: fd.rhs.map((s) => asAttribute(s)),
+    })),
+    position: { x: Math.random() * 400 + 100, y: Math.random() * 300 + 100 },
+  });
+
+  const publishUpdate = Effect.gen(function* (_) {
+    yield* PubSub.publish(events, { _tag: "NORMALIZATION_COMPLETED" });
+  });
+
+  const addRelation = (
+    name: string,
+    attributes: string[],
+    fds: { lhs: string[]; rhs: string[] }[],
+    x: number,
+    y: number
+  ): Effect.Effect<void> =>
+    Effect.gen(function* (_) {
+      const newRel: Relation = {
+        id: `${name}-${Date.now()}` as TableId,
+        name,
+        attributes: attributes.map((s) => asAttribute(s)),
+        fds: fds.map((fd) => ({
+          lhs: fd.lhs.map((s) => asAttribute(s)),
+          rhs: fd.rhs.map((s) => asAttribute(s)),
+        })),
+        position: { x, y },
+      };
+
+      yield* Ref.update(state, (ws) => ({
+        ...ws,
+        relations: [...ws.relations, newRel],
+      }));
+
+      yield* PubSub.publish(events, { _tag: "RELATION_ADDED", relation: newRel });
+      yield* Console.log(`Relation added: ${name}`);
     });
-    const events = yield* PubSub.unbounded<WorkspaceEvent>();
 
-    // Helper to brand strings safely (or validate)
-    const asAttribute = (s: string) => s as Attribute;
+  const renameRelation = (id: string, newName: string): Effect.Effect<void> =>
+    Effect.gen(function* (_) {
+      yield* Ref.update(state, (ws) => ({
+        ...ws,
+        relations: ws.relations.map((r) => (r.id === id ? { ...r, name: newName } : r)),
+      }));
+      yield* publishUpdate;
+    });
 
-    // Helper to convert BackendRelation to Relation
-    const toRelation = (br: typeof BackendRelation.Type): Relation => {
-        return {
-            id: br.name as TableId, // Use name as ID for simplicity in this version
-            name: br.name,
-            attributes: br.attributes.map(s => asAttribute(s)),
-            fds: br.fds.map(fd => ({
-                lhs: fd.lhs.map(s => asAttribute(s)),
-                rhs: fd.rhs.map(s => asAttribute(s))
-            })),
-            position: { x: Math.random() * 500 + 50, y: Math.random() * 300 + 50 } // Better random position
-        };
-    };
+  const deleteRelation = (id: string): Effect.Effect<void> =>
+    Effect.gen(function* (_) {
+      yield* Ref.update(state, (ws) => ({
+        ...ws,
+        relations: ws.relations.filter((r) => r.id !== id),
+      }));
+      yield* PubSub.publish(events, { _tag: "RELATION_DELETED", id });
+    });
 
-    const addRelation = (name: string, attributes: string[], fds: { lhs: string[], rhs: string[] }[], x: number, y: number) =>
-        Effect.gen(function* (_) {
-            const newRel: Relation = {
-                id: name as TableId,
-                name,
-                attributes: attributes.map(s => asAttribute(s)),
-                fds: fds.map(fd => ({
-                    lhs: fd.lhs.map(s => asAttribute(s)),
-                    rhs: fd.rhs.map(s => asAttribute(s))
-                })),
-                position: { x, y }
-            };
+  const addAttribute = (relationId: string, name: string): Effect.Effect<void> =>
+    Effect.gen(function* (_) {
+      yield* Ref.update(state, (ws) => ({
+        ...ws,
+        relations: ws.relations.map((r) =>
+          r.id === relationId ? { ...r, attributes: [...r.attributes, asAttribute(name)] } : r
+        ),
+      }));
+      yield* publishUpdate;
+    });
 
-            yield* Ref.update(state, ws => ({ // Changed workspace to state
-                ...ws,
-                relations: [...ws.relations, newRel]
-            }));
+  const deleteAttribute = (relationId: string, name: string): Effect.Effect<void> =>
+    Effect.gen(function* (_) {
+      yield* Ref.update(state, (ws) => ({
+        ...ws,
+        relations: ws.relations.map((r) =>
+          r.id === relationId ? { ...r, attributes: r.attributes.filter((a) => a !== name) } : r
+        ),
+      }));
+      yield* publishUpdate;
+    });
 
-            yield* PubSub.publish(events, { _tag: "RELATION_ADDED", relation: newRel });
-            yield* Console.log(`Relation added: ${name}`);
-        });
+  const addFD = (relationId: string, lhs: string[], rhs: string[]): Effect.Effect<void> =>
+    Effect.gen(function* (_) {
+      yield* Ref.update(state, (ws) => ({
+        ...ws,
+        relations: ws.relations.map((r) =>
+          r.id === relationId
+            ? {
+              ...r,
+              fds: [...r.fds, { lhs: lhs.map(asAttribute), rhs: rhs.map(asAttribute) }],
+            }
+            : r
+        ),
+      }));
+      yield* publishUpdate;
+    });
 
-    const updateRelationPosition = (id: string, x: number, y: number) =>
-        Ref.update(state, ws => ({ // Changed workspace to state
-            ...ws,
-            relations: ws.relations.map(r => r.id === id ? { ...r, position: { x, y } } : r)
+  const deleteFD = (relationId: string, index: number): Effect.Effect<void> =>
+    Effect.gen(function* (_) {
+      yield* Ref.update(state, (ws) => ({
+        ...ws,
+        relations: ws.relations.map((r) =>
+          r.id === relationId ? { ...r, fds: r.fds.filter((_, i) => i !== index) } : r
+        ),
+      }));
+      yield* publishUpdate;
+    });
+
+  const addCrossTableFD = (fromTableId: string, toTableId: string): Effect.Effect<void> =>
+    Effect.gen(function* (_) {
+      const ws = yield* Ref.get(state);
+      const fromRel = ws.relations.find((r) => r.id === fromTableId);
+      const toRel = ws.relations.find((r) => r.id === toTableId);
+
+      if (fromRel && toRel && fromTableId !== toTableId) {
+        yield* Ref.update(state, (s) => ({
+          ...s,
+          crossTableFDs: [
+            ...s.crossTableFDs,
+            {
+              fromTable: fromRel.name,
+              toTable: toRel.name,
+              fd: { lhs: [], rhs: [] }, // Empty FD, user can define later
+              suggestion: `Relationship from ${fromRel.name} to ${toRel.name}`,
+            },
+          ],
         }));
+        yield* publishUpdate;
+      }
+    });
 
-    const normalizeRelation = (relationId: string, strategy: OptimizationStrategy) =>
-        Effect.gen(function* (_) {
-            const ws = yield* Ref.get(state); // Changed workspace to state
-            const rel = ws.relations.find(r => r.id === relationId);
+  const deleteCrossTableFD = (index: number): Effect.Effect<void> =>
+    Effect.gen(function* (_) {
+      yield* Ref.update(state, (ws) => ({
+        ...ws,
+        crossTableFDs: ws.crossTableFDs.filter((_, i) => i !== index),
+      }));
+      yield* publishUpdate;
+    });
 
-            if (!rel) {
-                return undefined;
-            }
+  const updateRelationPosition = (id: string, x: number, y: number): Effect.Effect<void> =>
+    Ref.update(state, (ws) => ({
+      ...ws,
+      relations: ws.relations.map((r) => (r.id === id ? { ...r, position: { x, y } } : r)),
+    }));
 
-            // Transform to backend format
-            const payload = {
-                nrRelation: {
-                    rjName: rel.name,
-                    rjAttributes: rel.attributes,
-                    rjFDs: rel.fds.map(fd => ({ fjLhs: fd.lhs, fjRhs: fd.rhs }))
-                },
-                nrStrategy: strategy,
-                nrIncludeTree: true
-            };
+  const normalizeRelation = (
+    relationId: string,
+    strategy: OptimizationStrategy
+  ): Effect.Effect<typeof BackendDecompositionResult.Type | undefined, ApiError> =>
+    Effect.gen(function* (_) {
+      const ws = yield* Ref.get(state);
+      const rel = ws.relations.find((r) => r.id === relationId);
 
-            // API Call
-            const response = yield* Effect.tryPromise({
-                try: () => fetch("http://localhost:8080/api/normalize", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                }).then(res => res.json()),
-                catch: (e) => new ApiError({ message: String(e) })
-            });
+      if (!rel) {
+        return undefined;
+      }
 
-            // Decode response
-            const result = yield* Schema.decodeUnknown(BackendDecompositionResult)(response).pipe(
-                Effect.mapError(e => new ApiError({ message: String(e) }))
-            );
+      const payload = {
+        nrRelation: {
+          rjName: rel.name,
+          rjAttributes: rel.attributes,
+          rjFDs: rel.fds.map((fd) => ({ fjLhs: fd.lhs, fjRhs: fd.rhs })),
+        },
+        nrStrategy: strategy,
+        nrIncludeTree: true,
+      };
 
-            // Process Normalization Result
-            yield* Ref.update(state, ws => ({
-                ...ws,
-                relations: result.nresRelations.map(toRelation)
-            }));
+      const response = yield* Effect.tryPromise({
+        try: () =>
+          fetch("http://localhost:8080/api/normalize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }).then((res) => res.json()),
+        catch: (e) => new ApiError({ message: String(e) }),
+      });
 
-            // Publish event
-            yield* PubSub.publish(events, { _tag: "NORMALIZATION_COMPLETED" });
+      const result = yield* Schema.decodeUnknown(BackendDecompositionResult)(response).pipe(
+        Effect.mapError((e) => new ApiError({ message: String(e) }))
+      );
 
-            return result;
-        });
+      yield* Ref.update(state, (ws) => ({
+        ...ws,
+        relations: result.nresRelations.map(toRelation),
+      }));
 
-    // -- Workspace Optimization (Multi-table) --
-    // This is the "production" endpoint that returns cross-table FDs and health.
-    const optimizeWorkspace = (strategy: OptimizationStrategy) =>
-        Effect.gen(function* (_) {
-            const ws = yield* Ref.get(state);
+      yield* PubSub.publish(events, { _tag: "NORMALIZATION_COMPLETED" });
 
-            // Call API /api/workspace
-            const response = yield* Effect.tryPromise({
-                try: () => fetch("http://localhost:8080/api/workspace", { // Ensure full URL or proxy
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        wrRelations: ws.relations.map(r => ({
-                            rjName: r.name,
-                            rjAttributes: r.attributes,
-                            rjFDs: r.fds.map(fd => ({
-                                fjLhs: fd.lhs,
-                                fjRhs: fd.rhs
-                            }))
-                        })),
-                        wrStrategy: strategy
-                    })
-                }).then(res => res.json()),
-                catch: (e) => new ApiError({ message: String(e) })
-            });
+      return result;
+    });
 
+  const optimizeWorkspace = (strategy: OptimizationStrategy): Effect.Effect<void, ApiError> =>
+    Effect.gen(function* (_) {
+      const ws = yield* Ref.get(state);
 
-            const result = yield* Schema.decodeUnknown(BackendWorkspaceResponse)(response).pipe(
-                Effect.mapError(e => new ApiError({ message: String(e) }))
-            );
+      const response = yield* Effect.tryPromise({
+        try: () =>
+          fetch("http://localhost:8080/api/workspace", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              wrRelations: ws.relations.map((r) => ({
+                rjName: r.name,
+                rjAttributes: r.attributes,
+                rjFDs: r.fds.map((fd) => ({
+                  fjLhs: fd.lhs,
+                  fjRhs: fd.rhs,
+                })),
+              })),
+              wrStrategy: strategy,
+            }),
+          }).then((res) => res.json()),
+        catch: (e) => new ApiError({ message: String(e) }),
+      });
 
-            if (result.wresSuccess) {
-                // Update full workspace state with rich production data
-                yield* Ref.update(state, s => ({
-                    ...s,
-                    crossTableFDs: result.wresCrossTableFDs.map(ct => ({
-                        fromTable: ct.ctjFromTable,
-                        toTable: ct.ctjToTable,
-                        fd: { lhs: ct.ctjFD.lhs.map(s => Attribute.make(s)), rhs: ct.ctjFD.rhs.map(s => Attribute.make(s)) },
-                        suggestion: ct.ctjSuggestion
-                    })),
-                    health: result.wresHealth.map(h => ({
-                        tableName: h.thjTableName,
-                        severity: h.thjSeverity as any,
-                        message: h.thjMessage,
-                        suggestion: h.thjSuggestion
-                    })),
-                    mergeSuggestions: result.wresMergeSuggestions
-                }));
-                yield* PubSub.publish(events, { _tag: "WORKSPACE_OPTIMIZED" });
-            }
-        });
+      const result = yield* Schema.decodeUnknown(BackendWorkspaceResponse)(response).pipe(
+        Effect.mapError((e) => new ApiError({ message: String(e) }))
+      );
 
-    return {
-        workspace: state, // Changed workspace to state
-        events,
-        addRelation,
-        updateRelationPosition,
-        normalizeRelation,
-        optimizeWorkspace // Added
-    };
+      if (result.wresSuccess) {
+        yield* Ref.update(state, (s) => ({
+          ...s,
+          crossTableFDs: result.wresCrossTableFDs.map((ct) => ({
+            fromTable: ct.ctjFromTable,
+            toTable: ct.ctjToTable,
+            fd: {
+              lhs: ct.ctjFD.lhs.map((s) => Attribute.make(s)),
+              rhs: ct.ctjFD.rhs.map((s) => Attribute.make(s)),
+            },
+            suggestion: ct.ctjSuggestion,
+          })),
+          health: result.wresHealth.map((h) => ({
+            tableName: h.thjTableName,
+            severity: h.thjSeverity as "ok" | "warning" | "error",
+            message: h.thjMessage,
+            suggestion: h.thjSuggestion,
+          })),
+          mergeSuggestions: result.wresMergeSuggestions,
+        }));
+        yield* PubSub.publish(events, { _tag: "WORKSPACE_OPTIMIZED" });
+      }
+    });
+
+  return {
+    workspace: state,
+    events,
+    addRelation,
+    renameRelation,
+    deleteRelation,
+    addAttribute,
+    deleteAttribute,
+    addFD,
+    deleteFD,
+    addCrossTableFD,
+    deleteCrossTableFD,
+    updateRelationPosition,
+    normalizeRelation,
+    optimizeWorkspace,
+  };
 });
 
 export const WorkspaceServiceLive = Layer.effect(WorkspaceService, make);
