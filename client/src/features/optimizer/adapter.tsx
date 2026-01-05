@@ -17,6 +17,7 @@ import {
   type TableHealth,
   type Attribute,
   type TableId,
+  type BackendTreeNode,
 } from "../workspace/model";
 
 export const OptimizerAdapter = (): React.ReactElement => {
@@ -46,7 +47,7 @@ export const OptimizerAdapter = (): React.ReactElement => {
     });
 
     Effect.runPromise(program);
-    return () => {};
+    return () => { };
   }, [optimizerService]);
 
   const onStrategyChange = (strategy: OptimizationStrategy): void => {
@@ -71,39 +72,29 @@ export const OptimizerAdapter = (): React.ReactElement => {
           );
           if (result) {
             // Map backend result to frontend TreeNode
-            interface BackendTreeNode {
-              tnRelation: {
-                name: string;
-                attributes: readonly string[];
-                fds: readonly { lhs: readonly string[]; rhs: readonly string[] }[];
-              };
-              tnSplitFD: Option.Option<{ lhs: readonly string[]; rhs: readonly string[] }>;
-              tnChildren: readonly BackendTreeNode[];
-            }
-
             const mapTree = (node: BackendTreeNode): TreeNode => ({
               relation: {
-                id: node.tnRelation.name as TableId,
-                name: node.tnRelation.name,
-                attributes: node.tnRelation.attributes.map((a) => a as Attribute),
-                fds: node.tnRelation.fds.map((fd) => ({
-                  lhs: fd.lhs.map((a) => a as Attribute),
-                  rhs: fd.rhs.map((a) => a as Attribute),
+                id: node.tnRelation.rjName as TableId,
+                name: node.tnRelation.rjName,
+                attributes: node.tnRelation.rjAttributes.map((a) => a as Attribute),
+                fds: node.tnRelation.rjFDs.map((fd) => ({
+                  lhs: fd.fjLhs.map((a) => a as Attribute),
+                  rhs: fd.fjRhs.map((a) => a as Attribute),
                 })),
                 position: { x: 0, y: 0 },
               },
               splitFD: Option.map(node.tnSplitFD, (fd) => ({
-                lhs: fd.lhs.map((a) => a as Attribute),
-                rhs: fd.rhs.map((a) => a as Attribute),
+                lhs: fd.fjLhs.map((a) => a as Attribute),
+                rhs: fd.fjRhs.map((a) => a as Attribute),
               })),
               children: node.tnChildren.map(mapTree),
             });
 
             const health: Option.Option<TableHealth> = Option.map(result.nresHealth, (h) => ({
               tableName: targetId,
-              severity: (h.level === "critical" ? "error" : h.level) as "ok" | "warning" | "error",
-              message: h.message,
-              suggestion: h.suggestion,
+              severity: (h.hjLevel === "critical" ? "error" : h.hjLevel) as "ok" | "warning" | "error",
+              message: h.hjMessage,
+              suggestion: h.hjSuggestion,
             }));
 
             const tree = Option.map(result.nresTree as Option.Option<BackendTreeNode>, mapTree);

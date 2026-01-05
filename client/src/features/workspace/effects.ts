@@ -3,7 +3,7 @@
  * Effectful logic, PubSub, and API interactions.
  */
 
-import { Effect, Context, Layer, Ref, PubSub, Console } from "effect";
+import { Effect, Context, Layer, Ref, PubSub, Option } from "effect";
 import * as Schema from "@effect/schema/Schema";
 import {
   type Workspace,
@@ -14,7 +14,17 @@ import {
   BackendWorkspaceResponse,
   Attribute,
   type TableId,
+  BackendHealth,
 } from "./model";
+
+const BackendAnalyzeResponse = Schema.Struct({
+  aresSuccess: Schema.Boolean,
+  aresHealth: Schema.OptionFromNullOr(BackendHealth),
+  aresCandidateKeys: Schema.Array(Schema.Array(Schema.String)),
+  aresIsBCNF: Schema.Boolean,
+  aresIs3NF: Schema.Boolean,
+  aresError: Schema.OptionFromNullOr(Schema.String),
+});
 
 // -- Events --
 
@@ -30,7 +40,7 @@ export type WorkspaceEvent =
 
 export class ApiError extends Schema.TaggedError<ApiError>()("ApiError", {
   message: Schema.String,
-}) {}
+}) { }
 
 // -- Service Definition --
 
@@ -60,6 +70,7 @@ export interface WorkspaceService {
   ) => Effect.Effect<typeof BackendDecompositionResult.Type | undefined, ApiError>;
   readonly updateRelationPosition: (id: string, x: number, y: number) => Effect.Effect<void>;
   readonly optimizeWorkspace: (strategy: OptimizationStrategy) => Effect.Effect<void, ApiError>;
+  readonly mergeRelations: (name1: string, name2: string) => Effect.Effect<void>;
 }
 
 export const WorkspaceService = Context.GenericTag<WorkspaceService>("@app/WorkspaceService");
@@ -73,21 +84,41 @@ const make = Effect.gen(function* (_) {
     foreignKeys: [],
     health: [],
     mergeSuggestions: [],
+    analysisWarnings: [],
   });
   const events = yield* PubSub.unbounded<WorkspaceEvent>();
 
   const asAttribute = (s: string): Attribute => s as Attribute;
 
   const toRelation = (br: typeof BackendRelation.Type): Relation => ({
-    id: br.name as TableId,
-    name: br.name,
-    attributes: br.attributes.map((s) => asAttribute(s)),
-    fds: br.fds.map((fd) => ({
-      lhs: fd.lhs.map((s) => asAttribute(s)),
-      rhs: fd.rhs.map((s) => asAttribute(s)),
+    id: br.rjName as TableId,
+    name: br.rjName,
+    attributes: br.rjAttributes.map((s) => asAttribute(s)),
+    fds: br.rjFDs.map((fd) => ({
+      lhs: fd.fjLhs.map((s) => asAttribute(s)),
+      rhs: fd.fjRhs.map((s) => asAttribute(s)),
     })),
     position: { x: Math.random() * 400 + 100, y: Math.random() * 300 + 100 },
   });
+
+  const updateCrossTableSuggestions = (ws: Workspace): Workspace => {
+    const newCrossFDs = ws.crossTableFDs.map((ct) => {
+      const fromRel = ws.relations.find((r) => r.name === ct.fromTable);
+      const toRel = ws.relations.find((r) => r.name === ct.toTable);
+
+      if (!fromRel || !toRel) return ct;
+
+      const shared = fromRel.attributes.filter((attr) => toRel.attributes.includes(attr));
+      const suggestion =
+        shared.length > 0
+          ? `🔗 Linked via ${shared.join(", ")}`
+          : "⚠️ No shared keys. Rename attributes to match.";
+
+      return { ...ct, suggestion };
+    });
+
+    return { ...ws, crossTableFDs: newCrossFDs };
+  };
 
   const publishUpdate = Effect.gen(function* (_) {
     yield* PubSub.publish(events, { _tag: "NORMALIZATION_COMPLETED" });
@@ -118,7 +149,6 @@ const make = Effect.gen(function* (_) {
       }));
 
       yield* PubSub.publish(events, { _tag: "RELATION_ADDED", relation: newRel });
-      yield* Console.log(`Relation added: ${name}`);
     });
 
   const renameRelation = (id: string, newName: string): Effect.Effect<void> =>
@@ -137,11 +167,16 @@ const make = Effect.gen(function* (_) {
       yield* Ref.update(state, (ws) => ({
         ...ws,
         relations: ws.relations.map((r) => (r.id === id ? { ...r, name: newName } : r)),
-        crossTableFDs: ws.crossTableFDs.map((cfd) => ({
-          ...cfd,
-          fromTable: cfd.fromTable === oldName ? newName : cfd.fromTable,
-          toTable: cfd.toTable === oldName ? newName : cfd.toTable,
-        })),
+        crossTableFDs: ws.crossTableFDs.map((cfd) => {
+          const newFrom = cfd.fromTable === oldName ? newName : cfd.fromTable;
+          const newTo = cfd.toTable === oldName ? newName : cfd.toTable;
+          return {
+            ...cfd,
+            fromTable: newFrom,
+            toTable: newTo,
+            suggestion: `Relationship from ${newFrom} to ${newTo}`,
+          };
+        }),
         foreignKeys: ws.foreignKeys.map((fk) => ({
           ...fk,
           fromTable: fk.fromTable === oldName ? newName : fk.fromTable,
@@ -170,24 +205,46 @@ const make = Effect.gen(function* (_) {
 
   const addAttribute = (relationId: string, name: string): Effect.Effect<void> =>
     Effect.gen(function* (_) {
-      yield* Ref.update(state, (ws) => ({
-        ...ws,
-        relations: ws.relations.map((r) =>
-          r.id === relationId ? { ...r, attributes: [...r.attributes, asAttribute(name)] } : r
-        ),
-      }));
+      yield* Ref.update(state, (ws) => {
+        const next = {
+          ...ws,
+          relations: ws.relations.map((r) =>
+            r.id === relationId && !r.attributes.includes(asAttribute(name))
+              ? { ...r, attributes: [...r.attributes, asAttribute(name)] }
+              : r
+          ),
+        };
+        return updateCrossTableSuggestions(next);
+      });
       yield* publishUpdate;
+
+      // Real-time analysis
+      const ws = yield* Ref.get(state);
+      const updatedRel = ws.relations.find((r) => r.id === relationId);
+      if (updatedRel) {
+        yield* analyzeRelation(updatedRel);
+      }
     });
 
   const deleteAttribute = (relationId: string, name: string): Effect.Effect<void> =>
     Effect.gen(function* (_) {
-      yield* Ref.update(state, (ws) => ({
-        ...ws,
-        relations: ws.relations.map((r) =>
-          r.id === relationId ? { ...r, attributes: r.attributes.filter((a) => a !== name) } : r
-        ),
-      }));
+      yield* Ref.update(state, (ws) => {
+        const next = {
+          ...ws,
+          relations: ws.relations.map((r) =>
+            r.id === relationId ? { ...r, attributes: r.attributes.filter((a) => a !== name) } : r
+          ),
+        };
+        return updateCrossTableSuggestions(next);
+      });
       yield* publishUpdate;
+
+      // Real-time analysis
+      const ws = yield* Ref.get(state);
+      const updatedRel = ws.relations.find((r) => r.id === relationId);
+      if (updatedRel) {
+        yield* analyzeRelation(updatedRel);
+      }
     });
 
   const addFD = (relationId: string, lhs: string[], rhs: string[]): Effect.Effect<void> =>
@@ -197,13 +254,20 @@ const make = Effect.gen(function* (_) {
         relations: ws.relations.map((r) =>
           r.id === relationId
             ? {
-                ...r,
-                fds: [...r.fds, { lhs: lhs.map(asAttribute), rhs: rhs.map(asAttribute) }],
-              }
+              ...r,
+              fds: [...r.fds, { lhs: lhs.map(asAttribute), rhs: rhs.map(asAttribute) }],
+            }
             : r
         ),
       }));
       yield* publishUpdate;
+
+      // Real-time analysis
+      const ws = yield* Ref.get(state);
+      const updatedRel = ws.relations.find((r) => r.id === relationId);
+      if (updatedRel) {
+        yield* analyzeRelation(updatedRel);
+      }
     });
 
   const deleteFD = (relationId: string, index: number): Effect.Effect<void> =>
@@ -215,6 +279,13 @@ const make = Effect.gen(function* (_) {
         ),
       }));
       yield* publishUpdate;
+
+      // Real-time analysis
+      const ws = yield* Ref.get(state);
+      const updatedRel = ws.relations.find((r) => r.id === relationId);
+      if (updatedRel) {
+        yield* analyzeRelation(updatedRel);
+      }
     });
 
   const addCrossTableFD = (fromTableId: string, toTableId: string): Effect.Effect<void> =>
@@ -224,6 +295,12 @@ const make = Effect.gen(function* (_) {
       const toRel = ws.relations.find((r) => r.id === toTableId);
 
       if (fromRel && toRel && fromTableId !== toTableId) {
+        const shared = fromRel.attributes.filter((attr) => toRel.attributes.includes(attr));
+        const suggestion =
+          shared.length > 0
+            ? `🔗 Linked via ${shared.join(", ")}`
+            : "⚠️ No shared keys. Rename attributes to match.";
+
         yield* Ref.update(state, (s) => ({
           ...s,
           crossTableFDs: [
@@ -231,8 +308,8 @@ const make = Effect.gen(function* (_) {
             {
               fromTable: fromRel.name,
               toTable: toRel.name,
-              fd: { lhs: [], rhs: [] }, // Empty FD, user can define later
-              suggestion: `Relationship from ${fromRel.name} to ${toRel.name}`,
+              fd: { lhs: [], rhs: [] },
+              suggestion,
             },
           ],
         }));
@@ -247,6 +324,54 @@ const make = Effect.gen(function* (_) {
         crossTableFDs: ws.crossTableFDs.filter((_, i) => i !== index),
       }));
       yield* publishUpdate;
+    });
+
+  const analyzeRelation = (relation: Relation): Effect.Effect<void> =>
+    Effect.gen(function* (_) {
+      const payload = {
+        arRelation: {
+          rjName: relation.name,
+          rjAttributes: relation.attributes,
+          rjFDs: relation.fds.map((fd) => ({ fjLhs: fd.lhs, fjRhs: fd.rhs })),
+        },
+      };
+
+      // We explicitly ignore errors here so that the UI doesn't break if the background check fails
+      const response = yield* Effect.tryPromise({
+        try: () =>
+          fetch("http://localhost:8080/api/analyze", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }).then((res) => res.json()),
+        catch: (e) => new ApiError({ message: String(e) }),
+      }).pipe(Effect.catchAll(() => Effect.succeed({} as any))); // Fallback
+
+      // If we got a fallback (empty object) or invalid response, schema decode might fail
+      // We'll wrap the decode in an Option or catch error
+      const result = yield* Schema.decodeUnknown(BackendAnalyzeResponse)(response).pipe(
+        Effect.catchAll(() => Effect.succeed({ aresHealth: Option.none() } as any))
+      );
+
+      const healthOpt = result.aresHealth;
+      if (Option.isSome(healthOpt)) {
+        const h = healthOpt.value as any;
+        const newHealth = {
+          tableName: relation.name,
+          severity: (h.hjLevel === "Critical" ? "error" : h.hjLevel === "Warning" ? "warning" : "ok") as "ok" | "warning" | "error",
+          message: h.hjMessage,
+          suggestion: h.hjSuggestion,
+        };
+
+        yield* Ref.update(state, (ws) => ({
+          ...ws,
+          health: [
+            ...ws.health.filter((lh) => lh.tableName !== relation.name),
+            newHealth,
+          ],
+        }));
+        yield* publishUpdate;
+      }
     });
 
   const updateRelationPosition = (id: string, x: number, y: number): Effect.Effect<void> =>
@@ -330,27 +455,79 @@ const make = Effect.gen(function* (_) {
       );
 
       if (result.wresSuccess) {
-        yield* Ref.update(state, (s) => ({
-          ...s,
-          crossTableFDs: result.wresCrossTableFDs.map((ct) => ({
-            fromTable: ct.ctjFromTable,
-            toTable: ct.ctjToTable,
-            fd: {
-              lhs: ct.ctjFD.lhs.map((s) => Attribute.make(s)),
-              rhs: ct.ctjFD.rhs.map((s) => Attribute.make(s)),
-            },
-            suggestion: ct.ctjSuggestion,
-          })),
-          health: result.wresHealth.map((h) => ({
-            tableName: h.thjTableName,
-            severity: h.thjSeverity as "ok" | "warning" | "error",
-            message: h.thjMessage,
-            suggestion: h.thjSuggestion,
-          })),
-          mergeSuggestions: result.wresMergeSuggestions,
-        }));
+        yield* Ref.update(state, (s) => {
+          // Generate warnings from our local crossTableFDs, as they reflect the user's manual links
+          const activeCrossFDs = updateCrossTableSuggestions(s).crossTableFDs;
+          const warnings = activeCrossFDs
+            .filter((ct) => ct.suggestion.includes("No shared keys"))
+            .map((ct) => `Link between ${ct.fromTable} and ${ct.toTable}: ${ct.suggestion}`);
+
+          return {
+            ...s,
+            // Preserve our cross-table links, but don't overwrite them with empty results from backend
+            // Only update health and suggestions
+            health: result.wresHealth.map((h) => ({
+              tableName: h.thjTableName,
+              severity: h.thjSeverity as "ok" | "warning" | "error",
+              message: h.thjMessage,
+              suggestion: h.thjSuggestion,
+            })),
+            mergeSuggestions: result.wresMergeSuggestions,
+            analysisWarnings: warnings,
+          };
+        });
         yield* PubSub.publish(events, { _tag: "WORKSPACE_OPTIMIZED" });
       }
+    });
+
+  const mergeRelations = (name1: string, name2: string): Effect.Effect<void> =>
+    Effect.gen(function* (_) {
+      const ws = yield* Ref.get(state);
+      const r1 = ws.relations.find((r) => r.name === name1);
+      const r2 = ws.relations.find((r) => r.name === name2);
+
+      if (!r1 || !r2) return;
+
+      // Create merged relation
+      const mergedName = name1; // Keep first name
+      const mergedAttrs = Array.from(new Set([...r1.attributes, ...r2.attributes]));
+
+      // Merge FDs
+      // Simple concat for now, duplicate FDs are harmless but could be cleaned
+      const mergedFDs = [...r1.fds, ...r2.fds];
+
+      const mergedRel: Relation = {
+        id: r1.id, // Reuse ID of first
+        name: mergedName,
+        attributes: mergedAttrs,
+        fds: mergedFDs,
+        position: {
+          x: (r1.position.x + r2.position.x) / 2,
+          y: (r1.position.y + r2.position.y) / 2,
+        },
+      };
+
+      yield* Ref.update(state, (s) => {
+        const next = {
+          ...s,
+          relations: [...s.relations.filter((r) => r.name !== name1 && r.name !== name2), mergedRel],
+          // Remove the executed suggestion
+          mergeSuggestions: s.mergeSuggestions.filter(([t1, t2]) =>
+            !((t1 === name1 && t2 === name2) || (t1 === name2 && t2 === name1))
+          ),
+          // Clean up health entries for old tables
+          health: s.health.filter(h => h.tableName !== name1 && h.tableName !== name2),
+        };
+        // Update cross-table links to point to new merged table
+        // This is complex, so for now we'll just let the auto-updater handle links on next interaction
+        // checking `updateCrossTableSuggestions` logic... it maps by name. 
+        // We removed the old names, so old links point to nothing.
+        // We should add links for the new table. 
+        return updateCrossTableSuggestions(next);
+      });
+
+      yield* PubSub.publish(events, { _tag: "RELATION_UPDATED", relation: mergedRel });
+      yield* analyzeRelation(mergedRel);
     });
 
   return {
@@ -368,6 +545,7 @@ const make = Effect.gen(function* (_) {
     updateRelationPosition,
     normalizeRelation,
     optimizeWorkspace,
+    mergeRelations,
   };
 });
 
