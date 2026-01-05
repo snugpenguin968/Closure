@@ -1,10 +1,20 @@
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { type MergeSuggestionDisplay } from "../view-model";
-import { SuggestionsCard } from "./SuggestionsCard";
+import { type MergeSuggestionDisplay } from "./view-model";
+import { SuggestionsCard } from "./components/SuggestionsCard";
 
-export const WorkspaceDashboard = ({
+export interface DashboardViewProps {
+    onOptimize: (strategy: "bcnf" | "3nf") => void;
+    onAddTable: () => void;
+    onExportSQL: () => void;
+    suggestions: readonly MergeSuggestionDisplay[];
+    isAnalyzing?: boolean;
+    analysisWarnings: readonly string[];
+    onMerge: (id1: string, id2: string) => void;
+}
+
+export const DashboardView = ({
     onOptimize,
     onAddTable,
     onExportSQL,
@@ -12,17 +22,10 @@ export const WorkspaceDashboard = ({
     isAnalyzing,
     analysisWarnings,
     onMerge,
-}: {
-    onOptimize: () => void;
-    onAddTable: () => void;
-    onExportSQL: () => void;
-    suggestions: readonly MergeSuggestionDisplay[];
-    isAnalyzing?: boolean;
-    analysisWarnings: readonly string[];
-    onMerge: (id1: string, id2: string) => void;
-}): React.ReactElement => {
+}: DashboardViewProps): React.ReactElement => {
     const [showSuggestions, setShowSuggestions] = useState(true);
     const [lastSuggestions, setLastSuggestions] = useState(suggestions);
+    const [strategy, setStrategy] = useState<"bcnf" | "3nf">("bcnf");
 
     // Reset showSuggestions when new suggestions arrive
     if (suggestions !== lastSuggestions) {
@@ -49,20 +52,30 @@ export const WorkspaceDashboard = ({
                 >
                     💾 SQL
                 </Button>
-                <Button
-                    onClick={onOptimize}
-                    disabled={isAnalyzing}
-                    className="shadow-lg bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white disabled:opacity-70"
-                >
-                    {isAnalyzing ? (
-                        <>
-                            <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
-                            Analyzing...
-                        </>
-                    ) : (
-                        "✨ Analyze Workspace"
-                    )}
-                </Button>
+                <div className="flex bg-white/90 backdrop-blur shadow-lg rounded-md border border-slate-200 isolate">
+                    <select
+                        value={strategy}
+                        onChange={(e) => setStrategy(e.target.value as "bcnf" | "3nf")}
+                        className="bg-transparent text-xs font-bold text-slate-600 px-3 py-2 border-r border-slate-200 outline-none cursor-pointer hover:bg-slate-50 rounded-l-md appearance-none text-center"
+                    >
+                        <option value="bcnf">BCNF</option>
+                        <option value="3nf">3NF</option>
+                    </select>
+                    <Button
+                        onClick={() => onOptimize(strategy)}
+                        disabled={isAnalyzing}
+                        className="shadow-none rounded-l-none border-0 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white disabled:opacity-70"
+                    >
+                        {isAnalyzing ? (
+                            <>
+                                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                                Analyzing...
+                            </>
+                        ) : (
+                            "✨ Analyze"
+                        )}
+                    </Button>
+                </div>
             </div>
 
             {showSuggestions && suggestions.length > 0 && (
@@ -94,6 +107,7 @@ export const WorkspaceDashboard = ({
                     </CardContent>
                 </Card>
             )}
+
         </div>
     );
 };

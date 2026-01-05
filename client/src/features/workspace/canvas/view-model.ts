@@ -1,11 +1,6 @@
-/**
- * View Model Factory
- * Pure transformation of Domain Model -> UI Model (React Flow Nodes/Edges).
- */
-
 import { Effect, Option, HashMap } from "effect";
 import { type Node, type Edge, MarkerType } from "reactflow";
-import { type Workspace, type TableId, type FDId, type CrossTableFDId } from "./model";
+import { type Workspace, type TableId, type FDId, type CrossTableFDId } from "../model";
 
 // -- View Models --
 
@@ -25,14 +20,6 @@ export interface TableData {
     onOptimize: () => void;
 }
 
-export interface MergeSuggestionDisplay {
-    id1: string;
-    id2: string;
-    name1: string;
-    name2: string;
-    reason: string;
-}
-
 // -- Interfaces for Binding --
 
 export interface ServiceBinding {
@@ -50,30 +37,6 @@ export interface OptimizerBinding {
 }
 
 // -- Factory --
-
-export const mapSuggestionsToDisplay = (workspace: Workspace): MergeSuggestionDisplay[] => {
-    const idToName = new Map<string, string>();
-    for (const rel of HashMap.values(workspace.relations)) {
-        idToName.set(rel.id, rel.name);
-    }
-
-    return workspace.mergeSuggestions
-        .map((s) => {
-            const name1 = idToName.get(s.tableId1);
-            const name2 = idToName.get(s.tableId2);
-            if (!name1 || !name2) {
-                return null;
-            }
-            return {
-                id1: s.tableId1,
-                id2: s.tableId2,
-                name1,
-                name2,
-                reason: s.reason,
-            };
-        })
-        .filter((s): s is NonNullable<typeof s> => s !== null);
-};
 
 export const mapStateToFlow = (
     workspace: Workspace,

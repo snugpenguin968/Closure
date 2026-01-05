@@ -290,8 +290,11 @@ const make = Effect.gen(function* (_) {
 
         // 3. Update State
         yield* Ref.update(state, Actions.setAnalysisResults(newHealth, newSuggestions, []));
-        yield* PubSub.publish(events, { _tag: "ANALYSIS_COMPLETED" });
+      } else {
+        const errorMsg = Option.getOrElse(result.wresError, () => "Unknown analysis error");
+        yield* Ref.update(state, Actions.setAnalysisResults(HashMap.empty(), [], [errorMsg]));
       }
+      yield* PubSub.publish(events, { _tag: "ANALYSIS_COMPLETED" });
     });
 
   const analyzeRelation = (relation: Relation): Effect.Effect<void> =>

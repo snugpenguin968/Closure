@@ -29,7 +29,8 @@ export const SuggestionsCard = ({
                         className="text-xs p-2 bg-indigo-50 border border-indigo-100 rounded text-indigo-900 flex justify-between items-center"
                     >
                         <div>
-                            <span className="font-bold">{s.name1}</span> &{" "}
+                            <span className="font-bold">{s.name1}</span>
+                            <span className="mx-1 text-indigo-400">→</span>
                             <span className="font-bold">{s.name2}</span>
                             <p className="text-slate-600 mt-1">{s.reason}</p>
                         </div>
