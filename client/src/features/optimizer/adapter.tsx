@@ -47,7 +47,7 @@ export const OptimizerAdapter = (): React.ReactElement => {
     });
 
     Effect.runPromise(program);
-    return () => { };
+    return () => {};
   }, [optimizerService]);
 
   const onStrategyChange = (strategy: OptimizationStrategy): void => {
@@ -92,7 +92,10 @@ export const OptimizerAdapter = (): React.ReactElement => {
 
             const health: Option.Option<TableHealth> = Option.map(result.nresHealth, (h) => ({
               tableId: targetId as TableId,
-              severity: (h.hjLevel === "critical" ? "error" : h.hjLevel) as "ok" | "warning" | "error",
+              severity: (h.hjLevel === "critical" ? "error" : h.hjLevel) as
+                | "ok"
+                | "warning"
+                | "error",
               message: h.hjMessage,
               suggestion: h.hjSuggestion,
             }));

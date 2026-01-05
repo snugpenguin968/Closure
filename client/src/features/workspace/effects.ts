@@ -1,12 +1,13 @@
 /**
  * Effects (Service Layer)
  * Orchestrates API calls, PubSub events, and State Actions.
- * 
- * DESIGN: This layer handles the mapping between backend (name-based) 
+ *
+ * DESIGN: This layer handles the mapping between backend (name-based)
  * and frontend (ID-based) representations.
+ * Uses granular PubSub events for fine-grained reactivity.
  */
 
-import { Effect, Context, Layer, Ref, PubSub, Option } from "effect";
+import { Effect, Context, Layer, Ref, PubSub, Option, HashMap, pipe } from "effect";
 import * as Schema from "@effect/schema/Schema";
 import {
   type Workspace,
@@ -15,6 +16,7 @@ import {
   type BackendRelation,
   type TableId,
   type MergeSuggestion,
+  type Position,
   BackendDecompositionResult,
   BackendWorkspaceResponse,
   Attribute,
@@ -23,6 +25,7 @@ import {
 
 import { type WorkspaceState, initialState } from "./state";
 import * as Actions from "./actions";
+import { API_BASE_URL } from "./config";
 
 // -- Schemas --
 
@@ -35,22 +38,34 @@ const BackendAnalyzeResponse = Schema.Struct({
   aresError: Schema.OptionFromNullOr(Schema.String),
 });
 
-// -- Events --
+// -- Granular Events --
 
 export type WorkspaceEvent =
-  | { _tag: "STATE_UPDATED" }
-  | { _tag: "DECOMPOSITION_RESULT_RECEIVED"; result: typeof BackendDecompositionResult.Type }
-  | { _tag: "RELATION_ADDED"; relation: Relation }
-  | { _tag: "RELATION_UPDATED"; relation: Relation }
+  // Relation lifecycle
+  | { _tag: "RELATION_ADDED"; id: TableId; relation: Relation }
+  | { _tag: "RELATION_UPDATED"; id: TableId }
   | { _tag: "RELATION_DELETED"; id: TableId }
-  | { _tag: "NORMALIZATION_COMPLETED" }
-  | { _tag: "WORKSPACE_OPTIMIZED" };
+  | { _tag: "RELATION_MOVED"; id: TableId; position: Position }
+  // Cross-table relationships
+  | { _tag: "CROSS_TABLE_FD_ADDED"; fromId: TableId; toId: TableId }
+  | { _tag: "CROSS_TABLE_FD_DELETED"; index: number }
+  // Analysis
+  | { _tag: "ANALYSIS_STARTED" }
+  | { _tag: "ANALYSIS_COMPLETED" }
+  | { _tag: "NORMALIZATION_COMPLETED"; oldId: TableId; newIds: TableId[] }
+  // Merge
+  | { _tag: "RELATIONS_MERGED"; survivingId: TableId; deletedId: TableId }
+  // History
+  | { _tag: "UNDO" }
+  | { _tag: "REDO" }
+  // Generic fallback for bulk updates
+  | { _tag: "STATE_CHANGED" };
 
 // -- Errors --
 
 export class ApiError extends Schema.TaggedError<ApiError>()("ApiError", {
   message: Schema.String,
-}) { }
+}) {}
 
 // -- Service Definition --
 
@@ -95,20 +110,28 @@ const make = Effect.gen(function* (_) {
   const state = yield* Ref.make<WorkspaceState>(initialState);
   const events = yield* PubSub.unbounded<WorkspaceEvent>();
 
-  // Helpers
-  const updateAndNotify = (f: (s: WorkspaceState) => WorkspaceState): Effect.Effect<void> =>
+  // Helper: Update state and publish event
+  const updateAndPublish = (
+    action: (s: WorkspaceState) => WorkspaceState,
+    event: WorkspaceEvent
+  ): Effect.Effect<void> =>
     Effect.gen(function* (_) {
-      yield* Ref.update(state, f);
-      yield* PubSub.publish(events, { _tag: "STATE_UPDATED" });
+      yield* Ref.update(state, action);
+      yield* PubSub.publish(events, event);
     });
 
   // Build name→ID lookup from current workspace
-  const buildNameToIdMap = (ws: Workspace): Map<string, TableId> =>
-    new Map(ws.relations.map(r => [r.name, r.id]));
+  const buildNameToIdMap = (ws: Workspace): Map<string, TableId> => {
+    const result = new Map<string, TableId>();
+    for (const [id, rel] of HashMap.entries(ws.relations)) {
+      result.set(rel.name, id);
+    }
+    return result;
+  };
 
   // --- History ---
-  const undo = updateAndNotify(Actions.undo);
-  const redo = updateAndNotify(Actions.redo);
+  const undo = updateAndPublish(Actions.undo, { _tag: "UNDO" });
+  const redo = updateAndPublish(Actions.redo, { _tag: "REDO" });
 
   // --- CRUD ---
 
@@ -118,45 +141,99 @@ const make = Effect.gen(function* (_) {
     fds: { lhs: string[]; rhs: string[] }[],
     x: number,
     y: number
-  ) => updateAndNotify(Actions.addRelation(name, attributes, fds, x, y));
-
-  const deleteRelation = (id: TableId) =>
+  ) =>
     Effect.gen(function* (_) {
-      yield* Ref.update(state, Actions.deleteRelation(id));
-      yield* PubSub.publish(events, { _tag: "STATE_UPDATED" });
+      yield* Ref.update(state, Actions.addRelation(name, attributes, fds, x, y));
+      // Get the newly added relation
+      const currentState = yield* Ref.get(state);
+      const ws = currentState.present;
+      // Find by name (just added)
+      let addedRel: Relation | undefined;
+      for (const rel of HashMap.values(ws.relations)) {
+        if (rel.name === name) {
+          addedRel = rel;
+          break;
+        }
+      }
+      if (addedRel) {
+        yield* PubSub.publish(events, {
+          _tag: "RELATION_ADDED",
+          id: addedRel.id,
+          relation: addedRel,
+        });
+      }
     });
 
-  const renameRelation = (id: TableId, newName: string) => updateAndNotify(Actions.renameRelation(id, newName));
+  const deleteRelation = (id: TableId) =>
+    updateAndPublish(Actions.deleteRelation(id), { _tag: "RELATION_DELETED", id });
 
-  const addAttribute = (relationId: TableId, name: string) => updateAndNotify(Actions.addAttribute(relationId, name));
+  const renameRelation = (id: TableId, newName: string) =>
+    updateAndPublish(Actions.renameRelation(id, newName), { _tag: "RELATION_UPDATED", id });
 
-  const deleteAttribute = (relationId: TableId, name: string) => updateAndNotify(Actions.deleteAttribute(relationId, name));
+  const addAttribute = (relationId: TableId, name: string) =>
+    updateAndPublish(Actions.addAttribute(relationId, name), {
+      _tag: "RELATION_UPDATED",
+      id: relationId,
+    });
 
-  const addFD = (relationId: TableId, lhs: string[], rhs: string[]) => updateAndNotify(Actions.addFD(relationId, lhs, rhs));
+  const deleteAttribute = (relationId: TableId, name: string) =>
+    updateAndPublish(Actions.deleteAttribute(relationId, name), {
+      _tag: "RELATION_UPDATED",
+      id: relationId,
+    });
 
-  const deleteFD = (relationId: TableId, index: number) => updateAndNotify(Actions.deleteFD(relationId, index));
+  const addFD = (relationId: TableId, lhs: string[], rhs: string[]) =>
+    updateAndPublish(Actions.addFD(relationId, lhs, rhs), {
+      _tag: "RELATION_UPDATED",
+      id: relationId,
+    });
 
-  const addCrossTableFD = (fromTableId: TableId, toTableId: TableId) => updateAndNotify(Actions.addCrossTableFD(fromTableId, toTableId));
+  const deleteFD = (relationId: TableId, index: number) =>
+    updateAndPublish(Actions.deleteFD(relationId, index), {
+      _tag: "RELATION_UPDATED",
+      id: relationId,
+    });
 
-  const deleteCrossTableFD = (index: number) => updateAndNotify(Actions.deleteCrossTableFD(index));
+  const addCrossTableFD = (fromTableId: TableId, toTableId: TableId) =>
+    updateAndPublish(Actions.addCrossTableFD(fromTableId, toTableId), {
+      _tag: "CROSS_TABLE_FD_ADDED",
+      fromId: fromTableId,
+      toId: toTableId,
+    });
 
-  const updateRelationPosition = (id: TableId, x: number, y: number) => Ref.update(state, Actions.updateRelationPosition(id, x, y));
+  const deleteCrossTableFD = (index: number) =>
+    updateAndPublish(Actions.deleteCrossTableFD(index), { _tag: "CROSS_TABLE_FD_DELETED", index });
 
-  const mergeRelations = (id1: TableId, id2: TableId) => updateAndNotify(Actions.mergeRelations(id1, id2));
+  const updateRelationPosition = (id: TableId, x: number, y: number) =>
+    Effect.gen(function* (_) {
+      yield* Ref.update(state, Actions.updateRelationPosition(id, x, y));
+      // Position updates are frequent during drag, use specific event
+      yield* PubSub.publish(events, { _tag: "RELATION_MOVED", id, position: { x, y } });
+    });
+
+  const mergeRelations = (id1: TableId, id2: TableId) =>
+    updateAndPublish(Actions.mergeRelations(id1, id2), {
+      _tag: "RELATIONS_MERGED",
+      survivingId: id1,
+      deletedId: id2,
+    });
 
   // --- Complex Effects (API) ---
 
   const asAttribute = (s: string): Attribute => s as Attribute;
 
-  const toRelation = (br: typeof BackendRelation.Type, existingId?: TableId): Relation => ({
-    id: existingId ?? (crypto.randomUUID() as TableId),
+  const toRelation = (
+    br: typeof BackendRelation.Type,
+    position: Position = { x: 0, y: 0 }
+  ): Relation => ({
+    id: crypto.randomUUID() as TableId,
     name: br.rjName,
     attributes: br.rjAttributes.map((s) => asAttribute(s)),
     fds: br.rjFDs.map((fd) => ({
       lhs: fd.fjLhs.map((s) => asAttribute(s)),
       rhs: fd.fjRhs.map((s) => asAttribute(s)),
     })),
-    position: { x: 0, y: 0 },
+    position,
   });
 
   const normalizeRelation = (
@@ -167,11 +244,12 @@ const make = Effect.gen(function* (_) {
       const currentState = yield* Ref.get(state);
       const ws = currentState.present;
 
-      const rel = ws.relations.find((r) => r.id === relationId);
-
-      if (!rel) {
+      const relOpt = HashMap.get(ws.relations, relationId);
+      if (Option.isNone(relOpt)) {
         return undefined;
       }
+      const rel = relOpt.value;
+      const anchor = rel.position;
 
       const payload = {
         nrRelation: {
@@ -185,7 +263,7 @@ const make = Effect.gen(function* (_) {
 
       const response = yield* Effect.tryPromise({
         try: () =>
-          fetch("http://localhost:8080/api/normalize", {
+          fetch(`${API_BASE_URL}/api/normalize`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
@@ -197,32 +275,40 @@ const make = Effect.gen(function* (_) {
         Effect.mapError((e) => new ApiError({ message: String(e) }))
       );
 
-      // Atomic replacement of relation
-      yield* Ref.update(state, (s) => Actions.push(s, {
-        ...s.present,
-        relations: [
-          ...s.present.relations.filter(r => r.id !== relationId),
-          ...result.nresRelations.map(br => toRelation(br))
-        ]
-      }));
+      // Create new relations with positions spread from anchor
+      const newRelations = result.nresRelations.map((br, idx) =>
+        toRelation(br, {
+          x: anchor.x + (idx % 3) * 350,
+          y: anchor.y + Math.floor(idx / 3) * 200,
+        })
+      );
 
-      yield* PubSub.publish(events, { _tag: "STATE_UPDATED" });
+      // Replace old relation with new ones
+      yield* Ref.update(state, Actions.replaceRelation(relationId, newRelations));
+
+      const newIds = newRelations.map((r) => r.id);
+      yield* PubSub.publish(events, { _tag: "NORMALIZATION_COMPLETED", oldId: relationId, newIds });
 
       return result;
     });
 
   const optimizeWorkspace = (strategy: OptimizationStrategy): Effect.Effect<void, ApiError> =>
     Effect.gen(function* (_) {
+      yield* PubSub.publish(events, { _tag: "ANALYSIS_STARTED" });
+
       const currentState = yield* Ref.get(state);
       const ws = currentState.present;
 
+      // Convert HashMap to array for API
+      const relationsArray = Array.from(HashMap.values(ws.relations));
+
       const response = yield* Effect.tryPromise({
         try: () =>
-          fetch("http://localhost:8080/api/workspace", {
+          fetch(`${API_BASE_URL}/api/workspace`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              wrRelations: ws.relations.map((r) => ({
+              wrRelations: relationsArray.map((r) => ({
                 rjName: r.name,
                 rjAttributes: r.attributes,
                 rjFDs: r.fds.map((fd) => ({
@@ -251,7 +337,11 @@ const make = Effect.gen(function* (_) {
             if (!tableId) return null;
             return {
               tableId,
-              severity: (h.thjSeverity === "Critical" ? "error" : h.thjSeverity === "Warning" ? "warning" : "ok") as "ok" | "warning" | "error",
+              severity: (h.thjSeverity === "Critical"
+                ? "error"
+                : h.thjSeverity === "Warning"
+                  ? "warning"
+                  : "ok") as "ok" | "warning" | "error",
               message: h.thjMessage,
               suggestion: h.thjSuggestion,
             };
@@ -268,10 +358,8 @@ const make = Effect.gen(function* (_) {
           })
           .filter((s): s is NonNullable<typeof s> => s !== null);
 
-        // Update state with results
         yield* Ref.update(state, Actions.setAnalysisResults(newHealth, newMergeSuggestions, []));
-
-        yield* PubSub.publish(events, { _tag: "STATE_UPDATED" });
+        yield* PubSub.publish(events, { _tag: "ANALYSIS_COMPLETED" });
       }
     });
 
@@ -287,7 +375,7 @@ const make = Effect.gen(function* (_) {
 
       const response = yield* Effect.tryPromise({
         try: () =>
-          fetch("http://localhost:8080/api/analyze", {
+          fetch(`${API_BASE_URL}/api/analyze`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
@@ -304,7 +392,11 @@ const make = Effect.gen(function* (_) {
         const h = healthOpt.value as any;
         const newHealth = {
           tableId: relation.id,
-          severity: (h.hjLevel === "Critical" ? "error" : h.hjLevel === "Warning" ? "warning" : "ok") as "ok" | "warning" | "error",
+          severity: (h.hjLevel === "Critical"
+            ? "error"
+            : h.hjLevel === "Warning"
+              ? "warning"
+              : "ok") as "ok" | "warning" | "error",
           message: h.hjMessage,
           suggestion: h.hjSuggestion,
         };
@@ -313,12 +405,10 @@ const make = Effect.gen(function* (_) {
           ...s,
           present: {
             ...s.present,
-            health: [
-              ...s.present.health.filter((lh) => lh.tableId !== relation.id),
-              newHealth,
-            ],
-          }
+            health: [...s.present.health.filter((lh) => lh.tableId !== relation.id), newHealth],
+          },
         }));
+        yield* PubSub.publish(events, { _tag: "STATE_CHANGED" });
       }
     });
 

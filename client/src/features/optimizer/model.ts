@@ -3,9 +3,8 @@
  * State for the optimization sidebar.
  */
 
-import * as Schema from "@effect/schema/Schema";
-import { OptimizationStrategy, TreeNode, TableHealth } from "../workspace/model";
-import { type Option } from "effect";
+import { Option } from "effect";
+import { type OptimizationStrategy, type TreeNode, type TableHealth } from "../workspace/model";
 
 // Analysis result from optimization
 export interface Analysis {
@@ -14,17 +13,18 @@ export interface Analysis {
   readonly warnings: readonly string[];
 }
 
-export const OptimizerState = Schema.Struct({
-  isOpen: Schema.Boolean,
-  selectedStrategy: OptimizationStrategy,
-  targetRelationId: Schema.Option(Schema.String),
-  latestAnalysis: Schema.Option(
-    Schema.Struct({
-      tree: Schema.Option(TreeNode),
-      health: Schema.Option(TableHealth),
-      warnings: Schema.Array(Schema.String),
-    })
-  ),
-});
+// State is an interface since TreeNode/TableHealth are interfaces
+export interface OptimizerState {
+  readonly isOpen: boolean;
+  readonly selectedStrategy: OptimizationStrategy;
+  readonly targetRelationId: Option.Option<string>;
+  readonly latestAnalysis: Option.Option<Analysis>;
+}
 
-export type OptimizerState = Schema.Schema.Type<typeof OptimizerState>;
+// Initial state factory
+export const createInitialOptimizerState = (): OptimizerState => ({
+  isOpen: false,
+  selectedStrategy: "3nf",
+  targetRelationId: Option.none() as Option.Option<string>,
+  latestAnalysis: Option.none() as Option.Option<Analysis>,
+});
