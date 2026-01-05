@@ -30,7 +30,7 @@ export type WorkspaceEvent =
 
 export class ApiError extends Schema.TaggedError<ApiError>()("ApiError", {
   message: Schema.String,
-}) { }
+}) {}
 
 // -- Service Definition --
 
@@ -123,9 +123,38 @@ const make = Effect.gen(function* (_) {
 
   const renameRelation = (id: string, newName: string): Effect.Effect<void> =>
     Effect.gen(function* (_) {
+      const ws = yield* Ref.get(state);
+      const rel = ws.relations.find((r) => r.id === id);
+      if (!rel) {
+        return;
+      }
+      const oldName = rel.name;
+
+      if (oldName === newName) {
+        return;
+      }
+
       yield* Ref.update(state, (ws) => ({
         ...ws,
         relations: ws.relations.map((r) => (r.id === id ? { ...r, name: newName } : r)),
+        crossTableFDs: ws.crossTableFDs.map((cfd) => ({
+          ...cfd,
+          fromTable: cfd.fromTable === oldName ? newName : cfd.fromTable,
+          toTable: cfd.toTable === oldName ? newName : cfd.toTable,
+        })),
+        foreignKeys: ws.foreignKeys.map((fk) => ({
+          ...fk,
+          fromTable: fk.fromTable === oldName ? newName : fk.fromTable,
+          toTable: fk.toTable === oldName ? newName : fk.toTable,
+        })),
+        health: ws.health.map((h) => ({
+          ...h,
+          tableName: h.tableName === oldName ? newName : h.tableName,
+        })),
+        mergeSuggestions: ws.mergeSuggestions.map(
+          ([t1, t2, reason]) =>
+            [t1 === oldName ? newName : t1, t2 === oldName ? newName : t2, reason] as const
+        ),
       }));
       yield* publishUpdate;
     });
@@ -168,9 +197,9 @@ const make = Effect.gen(function* (_) {
         relations: ws.relations.map((r) =>
           r.id === relationId
             ? {
-              ...r,
-              fds: [...r.fds, { lhs: lhs.map(asAttribute), rhs: rhs.map(asAttribute) }],
-            }
+                ...r,
+                fds: [...r.fds, { lhs: lhs.map(asAttribute), rhs: rhs.map(asAttribute) }],
+              }
             : r
         ),
       }));
