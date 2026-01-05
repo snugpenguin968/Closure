@@ -22,11 +22,16 @@ import {
   MarkerType,
 } from "reactflow";
 
-import { mapStateToFlow } from "./view-model";
+import {
+  mapStateToFlow,
+  mapSuggestionsToDisplay,
+  type TableData,
+  type MergeSuggestionDisplay,
+} from "./view-model";
 
 import { useWorkspaceService } from "./context";
 import { useOptimizerService } from "../optimizer/context";
-import { WorkspaceCanvas, type TableData, type MergeSuggestionDisplay } from "./view";
+import { WorkspaceCanvas } from "./view";
 import {
   type Workspace,
   type Relation,
@@ -55,27 +60,8 @@ export const WorkspaceAdapter = (): React.ReactElement => {
         const flow = mapStateToFlow(ws, service, optimizerService);
 
         // Resolve merge suggestions: IDs → display names
-        const idToName = new Map<TableId, string>();
-        for (const rel of HashMap.values(ws.relations)) {
-          idToName.set(rel.id, rel.name);
-        }
-
-        const resolvedSuggestions: MergeSuggestionDisplay[] = ws.mergeSuggestions
-          .map((s) => {
-            const name1 = idToName.get(s.tableId1);
-            const name2 = idToName.get(s.tableId2);
-            if (!name1 || !name2) {
-              return null;
-            }
-            return {
-              id1: s.tableId1,
-              id2: s.tableId2,
-              name1,
-              name2,
-              reason: s.reason,
-            };
-          })
-          .filter((s): s is NonNullable<typeof s> => s !== null);
+        // Resolve merge suggestions
+        const resolvedSuggestions = mapSuggestionsToDisplay(ws);
 
         yield* Effect.sync(() => {
           setNodes(flow.nodes);
