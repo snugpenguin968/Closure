@@ -74,10 +74,10 @@ export const redo = <T>(history: History<T>): History<T> => {
 
 const makeAction =
   (transform: (ws: Workspace) => Workspace) =>
-  (state: WorkspaceState): WorkspaceState => {
-    const newWorkspace = transform(state.present);
-    return push(state, newWorkspace);
-  };
+    (state: WorkspaceState): WorkspaceState => {
+      const newWorkspace = transform(state.present);
+      return push(state, newWorkspace);
+    };
 
 // -- HashMap Helpers --
 
@@ -339,6 +339,9 @@ export const setRelations = (relations: HashMap.HashMap<TableId, Relation>) =>
     relations,
   }));
 
+/**
+ * Simple relation replacement (kept for backward compatibility).
+ */
 export const replaceRelation = (oldId: TableId, newRelations: Relation[]) =>
   makeAction((ws) => {
     let updated = HashMap.remove(ws.relations, oldId);
@@ -347,3 +350,123 @@ export const replaceRelation = (oldId: TableId, newRelations: Relation[]) =>
     }
     return { ...ws, relations: updated };
   });
+
+/**
+ * Decompose a relation into multiple tables with edge migration.
+ * 
+ * This action:
+ * 1. Removes the old relation
+ * 2. Adds all new decomposed relations
+ * 3. Migrates inbound edges (crossTableFDs/foreignKeys pointing TO old table)
+ * 4. Migrates outbound edges (edges FROM old table)
+ * 5. Cleans up health, merge suggestions
+ * 
+ * @param oldId - The table being decomposed
+ * @param newRelations - The decomposed tables with positions already set
+ * @param inboundMigrations - Map of edge ID → new target table ID
+ * @param outboundMigrations - Map of edge ID → new source table ID
+ */
+export const decomposeRelation = (
+  oldId: TableId,
+  newRelations: Relation[],
+  inboundMigrations: Map<CrossTableFDId, TableId>,
+  outboundMigrations: Map<CrossTableFDId, TableId>
+) =>
+  makeAction((ws) => {
+    // 1. Remove old relation, add new ones
+    let relations = HashMap.remove(ws.relations, oldId);
+    for (const rel of newRelations) {
+      relations = HashMap.set(relations, rel.id, rel);
+    }
+
+    // 2. Migrate crossTableFDs - update both inbound and outbound edges
+    let crossTableFDs = ws.crossTableFDs;
+
+    // Handle inbound edges (TO the decomposed table)
+    for (const [edgeId, newTargetId] of inboundMigrations) {
+      crossTableFDs = pipe(
+        HashMap.get(crossTableFDs, edgeId),
+        Option.map((ctfd) =>
+          HashMap.set(crossTableFDs, edgeId, {
+            ...ctfd,
+            toTableId: newTargetId,
+            suggestion: recalculateSuggestion(
+              HashMap.get(relations, ctfd.fromTableId),
+              HashMap.get(relations, newTargetId)
+            ),
+          })
+        ),
+        Option.getOrElse(() => crossTableFDs)
+      );
+    }
+
+    // Handle outbound edges (FROM the decomposed table)
+    for (const [edgeId, newSourceId] of outboundMigrations) {
+      crossTableFDs = pipe(
+        HashMap.get(crossTableFDs, edgeId),
+        Option.map((ctfd) =>
+          HashMap.set(crossTableFDs, edgeId, {
+            ...ctfd,
+            fromTableId: newSourceId,
+            suggestion: recalculateSuggestion(
+              HashMap.get(relations, newSourceId),
+              HashMap.get(relations, ctfd.toTableId)
+            ),
+          })
+        ),
+        Option.getOrElse(() => crossTableFDs)
+      );
+    }
+
+    // 3. Remove any edges that still reference the old table (unmigrated)
+    crossTableFDs = HashMap.filter(
+      crossTableFDs,
+      (ctfd) => ctfd.fromTableId !== oldId && ctfd.toTableId !== oldId
+    );
+
+    // 4. Migrate foreignKeys similarly
+    let foreignKeys = ws.foreignKeys;
+    foreignKeys = HashMap.filter(
+      foreignKeys,
+      (fk) => fk.fromTableId !== oldId && fk.toTableId !== oldId
+    );
+
+    // 5. Clean up health for old table
+    const health = HashMap.remove(ws.health, oldId);
+
+    // 6. Clean up merge suggestions involving old table
+    const mergeSuggestions = ws.mergeSuggestions.filter(
+      (s) => s.tableId1 !== oldId && s.tableId2 !== oldId
+    );
+
+    return {
+      ...ws,
+      relations,
+      crossTableFDs,
+      foreignKeys,
+      health,
+      mergeSuggestions,
+    };
+  });
+
+// Helper: Recalculate edge suggestion based on shared attributes
+const recalculateSuggestion = (
+  fromRelOpt: Option.Option<Relation>,
+  toRelOpt: Option.Option<Relation>
+): string => {
+  if (Option.isNone(fromRelOpt) || Option.isNone(toRelOpt)) {
+    return "Migrated (table not found)";
+  }
+
+  const fromRel = fromRelOpt.value;
+  const toRel = toRelOpt.value;
+
+  const fromAttrs = new Set(fromRel.attributes);
+  const sharedAttrs = toRel.attributes.filter((a) => fromAttrs.has(a));
+
+  if (sharedAttrs.length === 0) {
+    return "No shared keys? Potential join dependency.";
+  }
+  return `Shared: ${sharedAttrs.join(", ")} ✓ (migrated)`;
+};
+

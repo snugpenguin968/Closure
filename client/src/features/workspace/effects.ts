@@ -31,6 +31,8 @@ import { type WorkspaceState, initialState } from "./state";
 import * as Actions from "./actions";
 import { API_BASE_URL } from "./config";
 import { NetworkError, DecodeError, type WorkspaceError } from "./errors";
+import { layoutTree, layoutGrid, type LayoutNode, type LayoutResult } from "./layout";
+import { findBestDestination } from "./link-migration";
 
 // -- Schemas --
 
@@ -256,6 +258,12 @@ const make = Effect.gen(function* (_) {
     position,
   });
 
+  // Convert backend decomposition tree to layout node structure
+  const backendTreeToLayoutNode = (tree: any): LayoutNode => ({
+    name: tree.tnRelation.rjName,
+    children: tree.tnChildren.map(backendTreeToLayoutNode),
+  });
+
   const normalizeRelation = (
     relationId: TableId,
     strategy: OptimizationStrategy
@@ -298,17 +306,61 @@ const make = Effect.gen(function* (_) {
         )
       );
 
-      // Create new relations with positions spread from anchor
-      const newRelations = result.nresRelations.map((br, idx) =>
-        toRelation(br, {
-          x: anchor.x + (idx % 3) * 350,
-          y: anchor.y + Math.floor(idx / 3) * 200,
-        })
+      // 1. Calculate positions using tree layout if available
+      let positions: Map<string, Position>;
+
+      if (Option.isSome(result.nresTree)) {
+        // Use tree layout from decomposition result
+        const layoutNode = backendTreeToLayoutNode(result.nresTree.value);
+        const layoutResults = layoutTree(layoutNode, anchor);
+        positions = new Map(layoutResults.map((l) => [l.name, l.position]));
+      } else {
+        // Fallback to grid layout
+        const names = result.nresRelations.map((r) => r.rjName);
+        const layoutResults = layoutGrid(names, anchor);
+        positions = new Map(layoutResults.map((l) => [l.name, l.position]));
+      }
+
+      // 2. Create new relations with tree-based positions
+      const newRelations = result.nresRelations.map((br) =>
+        toRelation(br, positions.get(br.rjName) ?? anchor)
       );
 
-      // Replace old relation with new ones
-      yield* Ref.update(state, Actions.replaceRelation(relationId, newRelations));
+      // 3. Build edge migration maps
+      const inboundMigrations = new Map<CrossTableFDId, TableId>();
+      const outboundMigrations = new Map<CrossTableFDId, TableId>();
 
+      for (const [edgeId, ctfd] of HashMap.entries(ws.crossTableFDs)) {
+        // Inbound edges: pointing TO the decomposed table
+        if (ctfd.toTableId === relationId) {
+          const sourceRel = HashMap.get(ws.relations, ctfd.fromTableId);
+          if (Option.isSome(sourceRel)) {
+            const best = findBestDestination(sourceRel.value.attributes, newRelations);
+            if (best) {
+              inboundMigrations.set(edgeId, best.newTableId);
+            }
+          }
+        }
+
+        // Outbound edges: FROM the decomposed table
+        if (ctfd.fromTableId === relationId) {
+          const targetRel = HashMap.get(ws.relations, ctfd.toTableId);
+          if (Option.isSome(targetRel)) {
+            const best = findBestDestination(targetRel.value.attributes, newRelations);
+            if (best) {
+              outboundMigrations.set(edgeId, best.newTableId);
+            }
+          }
+        }
+      }
+
+      // 4. Apply decomposition with edge migrations
+      yield* Ref.update(
+        state,
+        Actions.decomposeRelation(relationId, newRelations, inboundMigrations, outboundMigrations)
+      );
+
+      // 5. Publish event
       const newIds = newRelations.map((r) => r.id);
       yield* PubSub.publish(events, { _tag: "NORMALIZATION_COMPLETED", oldId: relationId, newIds });
 
