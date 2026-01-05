@@ -48,7 +48,7 @@ export const OptimizerAdapter = (): React.ReactElement => {
     });
 
     Effect.runPromise(program);
-    return () => { };
+    return () => {};
   }, [optimizerService]);
 
   const onStrategyChange = (strategy: OptimizationStrategy): void => {

@@ -23,7 +23,7 @@ import {
   type TableHealth,
   BackendDecompositionResult,
   BackendWorkspaceResponse,
-  Attribute,
+  type Attribute,
   BackendHealth,
 } from "./model";
 
@@ -96,7 +96,9 @@ export interface WorkspaceService {
     strategy: OptimizationStrategy
   ) => Effect.Effect<typeof BackendDecompositionResult.Type | undefined, WorkspaceError>;
   readonly updateRelationPosition: (id: TableId, x: number, y: number) => Effect.Effect<void>;
-  readonly optimizeWorkspace: (strategy: OptimizationStrategy) => Effect.Effect<void, WorkspaceError>;
+  readonly optimizeWorkspace: (
+    strategy: OptimizationStrategy
+  ) => Effect.Effect<void, WorkspaceError>;
   readonly mergeRelations: (id1: TableId, id2: TableId) => Effect.Effect<void>;
   readonly analyzeRelation: (relation: Relation) => Effect.Effect<void>;
 }
@@ -291,7 +293,9 @@ const make = Effect.gen(function* (_) {
       });
 
       const result = yield* Schema.decodeUnknown(BackendDecompositionResult)(response).pipe(
-        Effect.mapError((e) => new DecodeError({ schema: "BackendDecompositionResult", message: String(e) }))
+        Effect.mapError(
+          (e) => new DecodeError({ schema: "BackendDecompositionResult", message: String(e) })
+        )
       );
 
       // Create new relations with positions spread from anchor
@@ -343,7 +347,9 @@ const make = Effect.gen(function* (_) {
       });
 
       const result = yield* Schema.decodeUnknown(BackendWorkspaceResponse)(response).pipe(
-        Effect.mapError((e) => new DecodeError({ schema: "BackendWorkspaceResponse", message: String(e) }))
+        Effect.mapError(
+          (e) => new DecodeError({ schema: "BackendWorkspaceResponse", message: String(e) })
+        )
       );
 
       if (result.wresSuccess) {
@@ -374,7 +380,9 @@ const make = Effect.gen(function* (_) {
           .map(([n1, n2, reason]) => {
             const id1 = nameToId.get(n1);
             const id2 = nameToId.get(n2);
-            if (!id1 || !id2) return null;
+            if (!id1 || !id2) {
+              return null;
+            }
             return { tableId1: id1, tableId2: id2, reason };
           })
           .filter((s): s is NonNullable<typeof s> => s !== null);
