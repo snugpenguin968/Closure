@@ -13,6 +13,12 @@ import { type Option } from "effect";
 export const Attribute = Schema.String.pipe(Schema.brand("Attribute"));
 export type Attribute = Schema.Schema.Type<typeof Attribute>;
 
+export interface History<T> {
+    readonly past: ReadonlyArray<T>;
+    readonly present: T;
+    readonly future: ReadonlyArray<T>;
+}
+
 export const TableId = Schema.String.pipe(Schema.brand("TableId"));
 export type TableId = Schema.Schema.Type<typeof TableId>;
 

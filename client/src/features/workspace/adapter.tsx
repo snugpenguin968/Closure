@@ -40,7 +40,8 @@ export const WorkspaceAdapter = (): React.ReactElement => {
     useEffect(() => {
         const program = Effect.gen(function* (_) {
             const updateUI = Effect.gen(function* (_) {
-                const ws = yield* Ref.get(service.workspace);
+                const state = yield* Ref.get(service.state); // Was service.workspace
+                const ws = state.present;
                 const flow = mapStateToFlow(ws, service, optimizerService);
                 yield* Effect.sync(() => {
                     setNodes(flow.nodes);
@@ -57,8 +58,20 @@ export const WorkspaceAdapter = (): React.ReactElement => {
 
         Effect.runPromise(program);
 
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+                if (e.shiftKey) {
+                    Effect.runPromise(service.redo);
+                } else {
+                    Effect.runPromise(service.undo);
+                }
+            }
+        };
+
+        window.addEventListener("keydown", handleKeyDown);
+
         return () => {
-            // Cleanup handled by GC
+            window.removeEventListener("keydown", handleKeyDown);
         };
     }, [service, optimizerService, setNodes, setEdges]);
 
@@ -109,6 +122,24 @@ export const WorkspaceAdapter = (): React.ReactElement => {
         [service]
     );
 
+    const onExportSQL = useCallback(() => {
+        const currentState = Effect.runSync(Ref.get(service.state));
+        const ws = currentState.present;
+
+        // Import dynamically to avoid circular deps if needed
+        import("./sql-generator").then(({ generateSQL }) => {
+            const sql = generateSQL(ws);
+
+            const blob = new Blob([sql], { type: "text/plain" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "schema.sql";
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+    }, [service]);
+
     return (
         <div className="w-full h-screen">
             <WorkspaceCanvas
@@ -121,6 +152,7 @@ export const WorkspaceAdapter = (): React.ReactElement => {
                 onEdgeClick={onEdgeClick}
                 onGlobalOptimize={onGlobalOptimizeWithLoading}
                 onAddTable={onAddTable}
+                onExportSQL={onExportSQL}
                 isAnalyzing={isAnalyzing}
                 mergeSuggestions={suggestions}
                 onMergeRelations={(t1, t2) => {

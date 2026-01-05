@@ -5,35 +5,24 @@
 
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useMemo } from "react";
 import { ManagedRuntime } from "effect";
 import { WorkspaceService, WorkspaceServiceLive } from "./effects";
 
-const ServiceContext = createContext<WorkspaceService | null>(null);
-
-// Create a ManagedRuntime for the service layer
-// This ensures the service lives as long as the runtime (app lifetime)
-const runtime = ManagedRuntime.make(WorkspaceServiceLive);
+const ServiceContext = createContext<WorkspaceService>({} as unknown as WorkspaceService);
 
 export const WorkspaceProvider = ({ children }: { children: React.ReactNode }) => {
-  const [service, setService] = useState<WorkspaceService | null>(null);
+    // Synchronously create runtime and get service (since we are client-side only 
+    // and using runSync for the service creation effect is safe if it doesn't do async IO in init)
+    // Actually, `make` just does Ref.make and PubSub.make which are synchronous.
+    // So we can use runSync.
 
-  useEffect(() => {
-    // Extract the service from the runtime
-    runtime.runPromise(WorkspaceService).then(setService);
-  }, []);
+    const service = useMemo(() => {
+        const runtime = ManagedRuntime.make(WorkspaceServiceLive);
+        return runtime.runSync(WorkspaceService);
+    }, []);
 
-  if (!service) {
-    return <div>Loading Workspace...</div>;
-  }
-
-  return <ServiceContext.Provider value={service}>{children}</ServiceContext.Provider>;
+    return <ServiceContext.Provider value={service}>{children}</ServiceContext.Provider>;
 };
 
-export const useWorkspaceService = () => {
-  const ctx = useContext(ServiceContext);
-  if (!ctx) {
-    throw new Error("useWorkspaceService must be used within WorkspaceProvider");
-  }
-  return ctx;
-};
+export const useWorkspaceService = () => useContext(ServiceContext);
