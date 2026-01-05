@@ -78,7 +78,7 @@ npm run dev
 3.  **Optimize**:
     *   Select a strategy:
         *   **BCNF (Strict)**: Maximum consistency, no redundancy. Best for write-heavy apps.
-        *   **3NF (Balanced)**: Standard industry target. allows minor redundancy for convenience.
+        *   **3NF (Balanced)**: Standard industry target. Allows minor redundancy for convenience.
         *   **Performance (Speed)**: Prioritizes **Read Speed** (denormalization). Allows redundancy to reduce JOINs, ideal for analytics or high-traffic read APIs.
     *   Let Closure automatically decompose your tables based on your choice.
 4.  **Export**:
