@@ -12,11 +12,15 @@ import {
   type Workspace,
   type Relation,
   type Attribute,
+  makeAttribute,
   type TableId,
+  makeTableId,
   type MergeSuggestion,
   type CrossTableFDId,
+  makeCrossTableFDId,
   type CrossTableFD,
   type FDId,
+  makeFDId,
   type TableHealth,
   type SQLType,
   DEFAULT_SQL_TYPE,
@@ -24,9 +28,9 @@ import {
 
 // -- UUID Generation --
 
-const generateTableId = (): TableId => crypto.randomUUID() as TableId;
-const generateFDId = (): FDId => crypto.randomUUID() as FDId;
-const generateCrossTableFDId = (): CrossTableFDId => crypto.randomUUID() as CrossTableFDId;
+const generateTableId = (): TableId => makeTableId(crypto.randomUUID());
+const generateFDId = (): FDId => makeFDId(crypto.randomUUID());
+const generateCrossTableFDId = (): CrossTableFDId => makeCrossTableFDId(crypto.randomUUID());
 
 // -- History Actions --
 
@@ -72,10 +76,10 @@ export const redo = <T>(history: History<T>): History<T> => {
 
 const makeAction =
   (transform: (ws: Workspace) => Workspace) =>
-  (state: WorkspaceState): WorkspaceState => {
-    const newWorkspace = transform(state.present);
-    return push(state, newWorkspace);
-  };
+    (state: WorkspaceState): WorkspaceState => {
+      const newWorkspace = transform(state.present);
+      return push(state, newWorkspace);
+    };
 
 // -- HashMap Helpers --
 
@@ -131,13 +135,13 @@ export const addRelation = (
       id,
       name,
       attributes: attributes.map((a) => ({
-        name: a.name as Attribute,
+        name: makeAttribute(a.name),
         sqlType: a.sqlType,
       })),
       fds: fds.map((fd) => ({
         id: generateFDId(),
-        lhs: fd.lhs.map((a) => a as Attribute),
-        rhs: fd.rhs.map((a) => a as Attribute),
+        lhs: fd.lhs.map((a) => makeAttribute(a)),
+        rhs: fd.rhs.map((a) => makeAttribute(a)),
       })),
       position: { x, y },
     };
@@ -179,7 +183,7 @@ export const addAttribute = (
       ...ws,
       relations: updateRelation(ws.relations, relationId, (r) => ({
         ...r,
-        attributes: [...r.attributes, { name: name as Attribute, sqlType }],
+        attributes: [...r.attributes, { name: makeAttribute(name), sqlType }],
       })),
     };
     return recalculateCrossTableSuggestions(updated);
@@ -193,7 +197,7 @@ export const deleteAttribute = (relationId: TableId, name: string) =>
         ...r,
         attributes: r.attributes.filter((a) => a.name !== name),
         fds: r.fds.filter(
-          (fd) => !fd.lhs.includes(name as Attribute) && !fd.rhs.includes(name as Attribute)
+          (fd) => !fd.lhs.includes(makeAttribute(name)) && !fd.rhs.includes(makeAttribute(name))
         ),
       })),
     };
@@ -209,8 +213,8 @@ export const addFD = (relationId: TableId, lhs: string[], rhs: string[]) =>
         ...r.fds,
         {
           id: generateFDId(),
-          lhs: lhs.map((a) => a as Attribute),
-          rhs: rhs.map((a) => a as Attribute),
+          lhs: lhs.map((a) => makeAttribute(a)),
+          rhs: rhs.map((a) => makeAttribute(a)),
         },
       ],
     })),

@@ -3,7 +3,7 @@
 import React, { useEffect, useCallback, useState } from "react";
 import { Effect, Ref, Stream, HashMap } from "effect";
 import { useWorkspaceService } from "../context";
-import { type TableId, type OptimizationStrategy } from "../model";
+import { type TableId, type OptimizationStrategy, makeTableId } from "../model";
 import { DashboardView } from "./view";
 import { mapSuggestionsToDisplay, type MergeSuggestionDisplay } from "./view-model";
 
@@ -47,7 +47,7 @@ export const DashboardAdapter = (): React.ReactElement => {
 
   const onOptimize = useCallback(
     (strategy: "bcnf" | "3nf") => {
-      Effect.runPromise(service.optimizeWorkspace(strategy as OptimizationStrategy));
+      Effect.runPromise(service.optimizeWorkspace(strategy));
     },
     [service]
   );
@@ -72,7 +72,7 @@ export const DashboardAdapter = (): React.ReactElement => {
 
   const onMerge = useCallback(
     (id1: string, id2: string) => {
-      Effect.runPromise(service.mergeRelations(id1 as TableId, id2 as TableId));
+      Effect.runPromise(service.mergeRelations(makeTableId(id1), makeTableId(id2)));
     },
     [service]
   );

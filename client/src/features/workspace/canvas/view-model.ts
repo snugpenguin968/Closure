@@ -4,6 +4,7 @@ import {
   type Workspace,
   type TableId,
   type FDId,
+  makeFDId,
   type CrossTableFDId,
   type SQLType,
 } from "../model";
@@ -87,7 +88,7 @@ export const mapStateToFlow = (
         Effect.runPromise(service.addFD(rel.id, lhs, rhs));
       },
       onDeleteFD: (fdId: string) => {
-        Effect.runPromise(service.deleteFD(rel.id, fdId as FDId));
+        Effect.runPromise(service.deleteFD(rel.id, makeFDId(fdId)));
       },
       onOptimize: () => {
         Effect.runPromise(optimizer.open(rel.id));

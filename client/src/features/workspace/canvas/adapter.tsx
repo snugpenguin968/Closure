@@ -16,7 +16,7 @@ import { CanvasView } from "./view";
 
 import { useWorkspaceService } from "../context";
 import { useOptimizerService } from "../../optimizer/context";
-import { type TableId } from "../model";
+import { type TableId, makeTableId } from "../model";
 
 export const CanvasAdapter = (): React.ReactElement => {
   const service = useWorkspaceService();
@@ -29,7 +29,7 @@ export const CanvasAdapter = (): React.ReactElement => {
     (params: Connection) => {
       if (params.source && params.target) {
         Effect.runPromise(
-          service.addCrossTableFD(params.source as TableId, params.target as TableId)
+          service.addCrossTableFD(makeTableId(params.source), makeTableId(params.target))
         );
       }
     },
@@ -39,7 +39,7 @@ export const CanvasAdapter = (): React.ReactElement => {
   const onNodeDragStop = useCallback(
     (_event: React.MouseEvent, node: Node) => {
       Effect.runPromise(
-        service.updateRelationPosition(node.id as TableId, node.position.x, node.position.y)
+        service.updateRelationPosition(makeTableId(node.id), node.position.x, node.position.y)
       );
     },
     [service]
@@ -54,9 +54,6 @@ export const CanvasAdapter = (): React.ReactElement => {
         const flow = mapStateToFlow(ws, service, optimizerService);
 
         yield* Effect.sync(() => {
-          // We need to be careful not to overwrite local drag state if we are dragging?
-          // But reactflow handles drag separately.
-          // Ideally we only update if things changed.
           setNodes(flow.nodes);
           setEdges(flow.edges);
         });

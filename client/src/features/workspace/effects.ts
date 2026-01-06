@@ -327,7 +327,7 @@ const make = Effect.gen(function* (_) {
                 aresIsBCNF: false,
                 aresIs3NF: false,
                 aresError: Option.none(),
-              } as BackendAnalyzeResponse)
+              })
             )
           );
 

@@ -14,6 +14,9 @@ import {
   type BackendWorkspaceResponse,
   type SQLType,
   DEFAULT_SQL_TYPE,
+  makeAttribute,
+  makeTableId,
+  makeFDId,
 } from "./model";
 import { type LayoutNode } from "./layout";
 
@@ -29,21 +32,21 @@ export interface TreeMapper {
 
 // -- Implementation --
 
-const asAttribute = (s: string): Attribute => s as Attribute;
+// Removed asAttribute as it is now redundant or replaced by makeAttribute
 
-const generateFDId = (): FDId => crypto.randomUUID() as FDId;
+const generateFDId = (): FDId => makeFDId(crypto.randomUUID());
 
 export const toRelation = (br: BackendRelation, position: Position = { x: 0, y: 0 }): Relation => ({
-  id: crypto.randomUUID() as TableId,
+  id: makeTableId(crypto.randomUUID()),
   name: br.rjName,
   attributes: br.rjAttributes.map((attr) => ({
-    name: asAttribute(attr.ajName),
+    name: makeAttribute(attr.ajName),
     sqlType: (attr.ajType || DEFAULT_SQL_TYPE) as SQLType,
   })),
   fds: br.rjFDs.map((fd) => ({
     id: generateFDId(),
-    lhs: fd.fjLhs.map((s) => asAttribute(s)),
-    rhs: fd.fjRhs.map((s) => asAttribute(s)),
+    lhs: fd.fjLhs.map((s) => makeAttribute(s)),
+    rhs: fd.fjRhs.map((s) => makeAttribute(s)),
   })),
   position,
 });
@@ -86,7 +89,7 @@ export const mapBackendHealth = (
           ? "error"
           : h.thjSeverity === "Warning"
             ? "warning"
-            : "ok") as "ok" | "warning" | "error",
+            : "ok"),
         message,
         suggestion: h.thjSuggestion,
       };
@@ -114,10 +117,7 @@ export const mapMergeSuggestions = (
 
 export const mapSingleHealth = (h: BackendHealth, relationId: TableId): TableHealth => ({
   tableId: relationId,
-  severity: (h.hjLevel === "Critical" ? "error" : h.hjLevel === "Warning" ? "warning" : "ok") as
-    | "ok"
-    | "warning"
-    | "error",
+  severity: (h.hjLevel === "Critical" ? "error" : h.hjLevel === "Warning" ? "warning" : "ok"),
   message: h.hjMessage,
   suggestion: h.hjSuggestion,
 });

@@ -20,6 +20,10 @@ import {
   type BackendTreeNode,
   type FDId,
   DEFAULT_SQL_TYPE,
+  makeTableId,
+  makeAttribute,
+  makeFDId,
+  type SQLType,
 } from "../workspace/model";
 
 export const OptimizerAdapter = (): React.ReactElement => {
@@ -49,7 +53,7 @@ export const OptimizerAdapter = (): React.ReactElement => {
     });
 
     Effect.runPromise(program);
-    return () => {};
+    return () => { };
   }, [optimizerService]);
 
   const onStrategyChange = (strategy: OptimizationStrategy): void => {
@@ -69,45 +73,43 @@ export const OptimizerAdapter = (): React.ReactElement => {
       Effect.runPromise(
         Effect.gen(function* (_) {
           const result = yield* workspaceService.normalizeRelation(
-            targetId as TableId,
+            makeTableId(targetId),
             state.selectedStrategy
           );
           if (result) {
             // Map backend result to frontend TreeNode
             const mapTree = (node: BackendTreeNode): TreeNode => ({
               relation: {
-                id: node.tnRelation.rjName as TableId,
+                id: makeTableId(node.tnRelation.rjName),
                 name: node.tnRelation.rjName,
                 attributes: node.tnRelation.rjAttributes.map((attr) => ({
-                  name: attr.ajName as Attribute,
-                  sqlType: (attr.ajType || DEFAULT_SQL_TYPE) as typeof DEFAULT_SQL_TYPE,
+                  name: makeAttribute(attr.ajName),
+                  sqlType: (attr.ajType || DEFAULT_SQL_TYPE) as SQLType,
                 })),
                 fds: node.tnRelation.rjFDs.map((fd) => ({
-                  id: crypto.randomUUID() as FDId,
-                  lhs: fd.fjLhs.map((a) => a as Attribute),
-                  rhs: fd.fjRhs.map((a) => a as Attribute),
+                  id: makeFDId(crypto.randomUUID()),
+                  lhs: fd.fjLhs.map((a) => makeAttribute(a)),
+                  rhs: fd.fjRhs.map((a) => makeAttribute(a)),
                 })),
                 position: { x: 0, y: 0 },
               },
               splitFD: Option.map(node.tnSplitFD, (fd) => ({
-                id: crypto.randomUUID() as FDId,
-                lhs: fd.fjLhs.map((a) => a as Attribute),
-                rhs: fd.fjRhs.map((a) => a as Attribute),
+                id: makeFDId(crypto.randomUUID()),
+                lhs: fd.fjLhs.map((a) => makeAttribute(a)),
+                rhs: fd.fjRhs.map((a) => makeAttribute(a)),
               })),
               children: node.tnChildren.map(mapTree),
             });
 
             const health: Option.Option<TableHealth> = Option.map(result.nresHealth, (h) => ({
-              tableId: targetId as TableId,
-              severity: (h.hjLevel === "critical" ? "error" : h.hjLevel) as
-                | "ok"
-                | "warning"
-                | "error",
+              tableId: makeTableId(targetId),
+              severity: (h.hjLevel === "critical" ? "error" : h.hjLevel === "warning" ? "warning" : "ok"),
               message: h.hjMessage,
               suggestion: h.hjSuggestion,
             }));
 
-            const tree = Option.map(result.nresTree as Option.Option<BackendTreeNode>, mapTree);
+            // nresTree is already an Option per Schema definition
+            const tree = Option.map(result.nresTree, mapTree);
 
             const analysis = {
               tree,

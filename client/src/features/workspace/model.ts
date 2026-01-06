@@ -15,6 +15,7 @@ import { type HashMap, type Option } from "effect";
 
 export const Attribute = Schema.String.pipe(Schema.brand("Attribute"));
 export type Attribute = Schema.Schema.Type<typeof Attribute>;
+export const makeAttribute = (name: string): Attribute => Schema.decodeUnknownSync(Attribute)(name);
 
 export const SQL_TYPES = [
   // Integers
@@ -87,15 +88,19 @@ export interface History<T> {
 // Stable UUIDs - never change after creation
 export const TableId = Schema.String.pipe(Schema.brand("TableId"));
 export type TableId = Schema.Schema.Type<typeof TableId>;
+export const makeTableId = (id: string): TableId => Schema.decodeUnknownSync(TableId)(id);
 
 export const FDId = Schema.String.pipe(Schema.brand("FDId"));
 export type FDId = Schema.Schema.Type<typeof FDId>;
+export const makeFDId = (id: string): FDId => Schema.decodeUnknownSync(FDId)(id);
 
 export const CrossTableFDId = Schema.String.pipe(Schema.brand("CrossTableFDId"));
 export type CrossTableFDId = Schema.Schema.Type<typeof CrossTableFDId>;
+export const makeCrossTableFDId = (id: string): CrossTableFDId => Schema.decodeUnknownSync(CrossTableFDId)(id);
 
 export const ForeignKeyId = Schema.String.pipe(Schema.brand("ForeignKeyId"));
 export type ForeignKeyId = Schema.Schema.Type<typeof ForeignKeyId>;
+export const makeForeignKeyId = (id: string): ForeignKeyId => Schema.decodeUnknownSync(ForeignKeyId)(id);
 
 // -- Position --
 
